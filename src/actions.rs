@@ -4,10 +4,11 @@
 //! the [`Control`] trait (signals, `docker stop`, sleeping), so PID reuse,
 //! grace periods and respawns are unit-tested with fakes and a fake clock.
 
-use std::process::{Command, Stdio};
+use std::process::{Command, Output};
 use std::time::Duration;
 
 use crate::model::{Entry, FailReason, ProcRef, StopMode, StopResult};
+use crate::run::{RunError, human, run_with_timeout};
 use crate::scan::Scanner;
 
 /// Timings from section 11.1 / 11.2.
@@ -263,6 +264,34 @@ fn parent_of(scanner: &mut Scanner, pid: u32) -> Option<ProcRef> {
     })
 }
 
+/// `docker stop` waits up to 10 s for the container before killing it; allow
+/// a little more, then give up (section 11.1).
+pub const DOCKER_STOP_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Maps the `docker stop` run to `Ok` or the message shown to the user
+/// (which becomes `FailReason::Other`).
+fn docker_stop_outcome(run: Result<Output, RunError>) -> Result<(), String> {
+    let out = match run {
+        Ok(out) => out,
+        Err(RunError::Timeout(_)) => {
+            return Err(format!(
+                "docker stop timed out after {}",
+                human(DOCKER_STOP_TIMEOUT)
+            ));
+        }
+        Err(RunError::Io(e)) => return Err(format!("could not run docker: {e}")),
+    };
+    if out.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    Err(if stderr.is_empty() {
+        format!("docker stop failed ({})", out.status)
+    } else {
+        stderr
+    })
+}
+
 /// The real [`Control`]: OS signals, the docker CLI and a real sleep.
 #[derive(Debug, Default)]
 pub struct OsControl;
@@ -279,20 +308,11 @@ impl Control for OsControl {
     fn docker_stop(&mut self, id: &str) -> Result<(), String> {
         // `id` comes from docker itself and is passed as one argument, never
         // through a shell (section 16).
-        let out = Command::new("docker")
-            .args(["stop", id])
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|e| format!("could not run docker: {e}"))?;
-        if out.status.success() {
-            return Ok(());
-        }
-        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        Err(if stderr.is_empty() {
-            format!("docker stop failed ({})", out.status)
-        } else {
-            stderr
-        })
+        let cmd = &mut Command::new("docker");
+        docker_stop_outcome(run_with_timeout(
+            cmd.args(["stop", id]),
+            DOCKER_STOP_TIMEOUT,
+        ))
     }
 
     fn sleep(&mut self, d: Duration) {
@@ -916,6 +936,66 @@ mod tests {
         assert!(signals(&fake).is_empty());
     }
 
+    fn exit_status(code: u8) -> std::process::ExitStatus {
+        #[cfg(unix)]
+        use std::os::unix::process::ExitStatusExt;
+        #[cfg(windows)]
+        use std::os::windows::process::ExitStatusExt;
+        // Unix wait status: exit code in the high byte. Windows: the code.
+        #[cfg(unix)]
+        let raw = i32::from(code) << 8;
+        #[cfg(windows)]
+        let raw = u32::from(code);
+        std::process::ExitStatus::from_raw(raw)
+    }
+
+    fn output(code: u8, stderr: &str) -> Output {
+        Output {
+            status: exit_status(code),
+            stdout: Vec::new(),
+            stderr: stderr.as_bytes().to_vec(),
+        }
+    }
+
+    #[test]
+    fn docker_stop_timeout_message() {
+        let r = docker_stop_outcome(Err(RunError::Timeout(DOCKER_STOP_TIMEOUT)));
+        assert_eq!(r, Err("docker stop timed out after 15 s".to_string()));
+        assert_eq!(DOCKER_STOP_TIMEOUT, Duration::from_secs(15));
+    }
+
+    #[test]
+    fn docker_stop_other_outcomes() {
+        assert_eq!(docker_stop_outcome(Ok(output(0, ""))), Ok(()));
+        assert_eq!(
+            docker_stop_outcome(Ok(output(
+                1,
+                "Error response from daemon: No such container: x\n"
+            ))),
+            Err("Error response from daemon: No such container: x".to_string())
+        );
+        let silent = docker_stop_outcome(Ok(output(1, "")));
+        assert!(silent.is_err_and(|m| m.starts_with("docker stop failed")));
+        let missing = docker_stop_outcome(Err(RunError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "not found",
+        ))));
+        assert!(missing.is_err_and(|m| m.starts_with("could not run docker")));
+    }
+
+    #[test]
+    fn docker_stop_timeout_becomes_failed_other() {
+        let mut w = World::new();
+        w.docker_result = docker_stop_outcome(Err(RunError::Timeout(DOCKER_STOP_TIMEOUT)));
+        let (r, _) = run(w, &container_entry(), false);
+        assert_eq!(
+            r,
+            failed(FailReason::Other(
+                "docker stop timed out after 15 s".to_string()
+            ))
+        );
+    }
+
     /// The real Control against a real child process.
     #[test]
     fn os_terminate_stops_a_real_child() -> anyhow::Result<()> {
@@ -928,7 +1008,7 @@ mod tests {
             c.arg("30");
             c
         };
-        let mut child = cmd.stdout(Stdio::null()).spawn()?;
+        let mut child = cmd.stdout(std::process::Stdio::null()).spawn()?;
         let pid = child.id();
         let sent = OsControl.terminate(pid);
         let status = child.wait()?;

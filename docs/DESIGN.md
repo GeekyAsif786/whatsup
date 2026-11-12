@@ -316,7 +316,9 @@ on port 6xxx will show up. That's acceptable, and fixable with a rule.
 
 ```text
 stop(entry, mode):
-  if entry.container:            run `docker stop <id>`; report its stderr on failure
+  if entry.container:            run `docker stop <id>`; report its stderr on failure;
+                                 give up after 15 s (above Docker's own 10 s stop grace):
+                                 Failed(Other("docker stop timed out after 15 s"))
   if entry.pid is None:          fail: "PID hidden — run with sudo / elevated terminal"
   targets = [pid]                (mode = Listener, default)
           | process group / dev-command ancestors   (mode = Tree, v0.2)
