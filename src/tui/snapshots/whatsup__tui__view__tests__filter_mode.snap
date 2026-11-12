@@ -1,0 +1,18 @@
+---
+source: src/tui/view.rs
+expression: "text(&draw(&app, COLOR, 80, 14))"
+---
+ whatsup   2 listening (dev)
+╭──────────────────────────────────────────────────────────────────────────────╮
+│  PORT   KIND          PROCESS                      PID     EXPOSED   UP   MEM│
+│▶ :3000  next.js       node                         41822   local     2h  412M│
+│  :5173  vite          node                         41901   local    14m  1.5G│
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+cmd       node /home/me/code/web/node_modules/.bin/next dev
+cwd       ~/code/web
+addr      127.0.0.1, ::1 (local)
+container -
+ /node   Enter keep · Esc clear · ↑↓ move

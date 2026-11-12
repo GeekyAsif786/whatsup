@@ -1,0 +1,18 @@
+---
+source: src/tui/view.rs
+expression: text(&buf)
+---
+ whatsup   5 listening (all)   ⚠ 3 exposed to network
+╭──────────────────────────────────────────────────────────────────────────────╮
+│  PORT   KIND          PROCESS                      PID     EXPOSED   UP   MEM│
+│▶ :3000  next.js       node                         41822   local     2h  412M│
+│  :5173  vite          node                         41901   local    14m  1.5G│
+│  :5432  docker        db (postgres:16)             -       network   3d     -│
+│  :8000  fastapi       python3                      5150    network  42s   18M│
+│  :57621 other         Spotify                      812     network   1d  260M│
+╰──────────────────────────────────────────────────────────────────────────────╯
+cmd       node /home/me/code/web/node_modules/.bin/next dev
+cwd       ~/code/web
+addr      127.0.0.1, ::1 (local)
+container -
+ ✗ could not stop: permission denied

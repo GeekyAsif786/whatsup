@@ -1,0 +1,16 @@
+---
+source: src/tui/view.rs
+expression: "text(&draw(&scanning, COLOR, 70, 12))"
+---
+ whatsup   scanning…
+╭────────────────────────────────────────────────────────────────────╮
+│  PORT   KIND          PROCESS            PID     EXPOSED   UP   MEM│
+│                                                                    │
+│                              scanning…                             │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+
+
+
+
+ ↑↓ move · / filter · a all/dev · r refresh · q quit

@@ -1,10 +1,17 @@
 //! Integration tests (DESIGN.md section 17.2): real listeners, the real
 //! scanner, and the built `whatsup` binary. Run in CI on Linux, macOS and
-//! Windows. Needs Python 3 on PATH (`python3`, or `python` on Windows).
+//! Windows.
+//!
+//! Most tests use a tiny Rust listener (see [`listener_helper`]): this test
+//! binary re-runs itself to bind a socket and wait. It is listening in
+//! milliseconds. Python's `http.server` takes ~35 s to start on macOS
+//! runners, so only one test uses it, to prove the "python http"
+//! classification on a real `python -m http.server` (needs Python 3 on
+//! PATH: `python3`, or `python` on Windows).
 
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, ChildStdout, Command, Output, Stdio};
 use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -16,11 +23,52 @@ use whatsup::sources::sockets::NativeSockets;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-/// Kills and reaps the server when dropped, so it never outlives a test,
-/// even when an assertion fails.
+/// Set to `addr` (e.g. `127.0.0.1`) to turn [`listener_helper`] into a
+/// listener process.
+const LISTEN_ENV: &str = "WHATSUP_TEST_LISTEN";
+/// What the helper prints once it is listening, followed by the port.
+const READY: &str = "whatsup-test-listening-on=";
+/// The helper exits on its own after this long, in case a test runner dies
+/// without killing it.
+const HELPER_LIFETIME: Duration = Duration::from_secs(120);
+
+/// Not a test: when [`LISTEN_ENV`] is set, binds a TCP listener on that
+/// address (port 0: the OS picks a free one), prints [`READY`] and the port,
+/// and accepts connections until killed. Without the variable it does
+/// nothing and passes.
+#[test]
+fn listener_helper() {
+    let Ok(addr) = std::env::var(LISTEN_ENV) else {
+        return;
+    };
+    let listener = match TcpListener::bind((addr.as_str(), 0)) {
+        Ok(l) => l,
+        Err(e) => panic!("helper could not bind {addr}: {e}"),
+    };
+    let port = match listener.local_addr() {
+        Ok(a) => a.port(),
+        Err(e) => panic!("helper has no local address: {e}"),
+    };
+    // bind() has already called listen(): the port is in LISTEN now.
+    let mut out = std::io::stdout();
+    let _ = writeln!(out, "\n{READY}{port}");
+    let _ = out.flush();
+    std::thread::spawn(|| {
+        sleep(HELPER_LIFETIME);
+        std::process::exit(0);
+    });
+    for conn in listener.incoming() {
+        drop(conn);
+    }
+}
+
+/// A listener process for a test. Kills and reaps it when dropped, so it
+/// never outlives the test, even when an assertion fails.
 struct Server {
     child: Child,
     port: u16,
+    /// Kept open so the child never writes to a closed pipe.
+    _stdout: Option<BufReader<ChildStdout>>,
 }
 
 impl Drop for Server {
@@ -30,11 +78,43 @@ impl Drop for Server {
     }
 }
 
-/// Ports already handed to a test in this run. Tests run in parallel, and
-/// macOS hands out ephemeral ports sequentially: without this, a port picked
-/// for a slow-starting server (python can take ~35 s to listen on macOS
-/// runners) could be picked again as "free" by another test before it is
-/// bound.
+/// Starts the Rust listener on `addr`; returns once it is listening.
+fn listener(addr: &str) -> Result<Server, Box<dyn std::error::Error>> {
+    let child = Command::new(std::env::current_exe()?)
+        .args([
+            "--exact",
+            "listener_helper",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(LISTEN_ENV, addr)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let mut server = Server {
+        child,
+        port: 0,
+        _stdout: None,
+    };
+    let stdout = server.child.stdout.take().ok_or("helper has no stdout")?;
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            return Err(format!("listener helper on {addr} exited before listening").into());
+        }
+        if let Some(port) = line.trim().strip_prefix(READY) {
+            server.port = port.parse()?;
+            server._stdout = Some(reader);
+            return Ok(server);
+        }
+    }
+}
+
+/// Ports already handed out in this run, so parallel tests never pick the
+/// same "free" port while a slow server is still starting.
 static RESERVED: Mutex<Vec<u16>> = Mutex::new(Vec::new());
 
 /// A port that was free a moment ago and that no other test in this run
@@ -80,7 +160,11 @@ fn http_server(bind: &str) -> Result<Server, Box<dyn std::error::Error>> {
         // can't fill up while it runs.
         .stderr(Stdio::piped())
         .spawn()?;
-    let mut server = Server { child, port };
+    let mut server = Server {
+        child,
+        port,
+        _stdout: None,
+    };
     let started = Instant::now();
     let deadline = started + Duration::from_secs(60);
     while !is_listening(port)? {
@@ -155,38 +239,57 @@ fn text(out: &Output) -> String {
     )
 }
 
+/// The one Python test: a real `python -m http.server` is classified as
+/// "python http", counts as dev, and shows its command.
 #[test]
-fn scanner_sees_local_and_network_http_servers() -> TestResult {
-    let local = http_server("127.0.0.1")?;
-    let network = http_server("0.0.0.0")?;
+fn python_http_server_is_classified() -> TestResult {
+    let server = http_server("127.0.0.1")?;
+    let entries = Scanner::system()?.scan()?;
+    let e = find(&entries, server.port)?;
+    assert_eq!(e.kind, Kind::PythonHttp, "{e:#?}");
+    assert_eq!(e.kind.as_str(), "python http");
+    assert_eq!(e.exposure, Exposure::Local, "{e:#?}");
+    assert!(e.dev, "{e:#?}");
+    assert_eq!(e.pid, Some(server.child.id()), "{e:#?}");
+    assert!(e.command.contains("http.server"), "{e:#?}");
+
+    let out = whatsup(&["port", &server.port.to_string()])?;
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("python http"));
+    Ok(())
+}
+
+#[test]
+fn scanner_sees_local_and_network_listeners() -> TestResult {
+    let local = listener("127.0.0.1")?;
+    let network = listener("0.0.0.0")?;
 
     let entries = Scanner::system()?.scan()?;
 
     let l = find(&entries, local.port)?;
     assert_eq!(l.exposure, Exposure::Local, "{l:#?}");
-    assert_eq!(l.kind, Kind::PythonHttp, "{l:#?}");
-    assert_eq!(l.kind.as_str(), "python http");
-    assert!(l.dev, "{l:#?}");
-    assert!(l.pid.is_some(), "{l:#?}");
-    assert!(l.command.contains("http.server"), "{l:#?}");
+    assert_eq!(l.addrs, ["127.0.0.1"], "{l:#?}");
+    assert_eq!(l.pid, Some(local.child.id()), "{l:#?}");
 
     let n = find(&entries, network.port)?;
     assert_eq!(n.exposure, Exposure::Network, "{n:#?}");
-    assert_eq!(n.kind, Kind::PythonHttp, "{n:#?}");
     assert_eq!(n.addrs, ["*"], "{n:#?}");
+    assert_eq!(n.pid, Some(network.child.id()), "{n:#?}");
     Ok(())
 }
 
 #[test]
 fn binary_port_list_kill_round_trip() -> TestResult {
-    let server = http_server("127.0.0.1")?;
+    let server = listener("127.0.0.1")?;
     let p = server.port.to_string();
 
     let out = whatsup(&["port", &p])?;
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    assert!(String::from_utf8_lossy(&out.stdout).contains("python http"));
+    assert!(String::from_utf8_lossy(&out.stdout).contains(&format!(":{p}")));
 
-    let out = whatsup(&["list", "--json"])?;
+    // The helper is an unrecognised process on an ephemeral port, so it is
+    // not "dev": it needs --all.
+    let out = whatsup(&["list", "--json", "--all"])?;
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     let json: serde_json::Value = serde_json::from_slice(&out.stdout)?;
     assert_eq!(json["schema"], 1);
@@ -195,7 +298,7 @@ fn binary_port_list_kill_round_trip() -> TestResult {
         .ok_or("entries is not an array")?;
     assert!(
         entries.iter().any(|e| e["port"] == server.port
-            && e["kind"] == "python http"
+            && e["pid"] == server.child.id()
             && e["exposure"] == "local"),
         "{}",
         text(&out)
@@ -213,7 +316,7 @@ fn binary_port_list_kill_round_trip() -> TestResult {
 
 #[test]
 fn kill_without_terminal_or_yes_is_a_usage_error() -> TestResult {
-    let server = http_server("127.0.0.1")?;
+    let server = listener("127.0.0.1")?;
     let out = whatsup(&["kill", &server.port.to_string()])?;
     assert_eq!(out.status.code(), Some(2), "{}", text(&out));
     assert!(String::from_utf8_lossy(&out.stderr).contains("pass -y"));
@@ -224,12 +327,21 @@ fn kill_without_terminal_or_yes_is_a_usage_error() -> TestResult {
 
 #[test]
 fn piped_output_has_no_ansi_even_without_no_color() -> TestResult {
-    let _server = http_server("127.0.0.1")?;
+    let server = listener("0.0.0.0")?;
     let out = Command::new(env!("CARGO_BIN_EXE_whatsup"))
         .args(["list", "--all"])
         .env_remove("NO_COLOR")
         .output()?;
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // The exposed listener is in the table and triggers the (yellow when
+    // on a terminal) warning line.
+    assert!(
+        stdout.contains(&format!(":{}", server.port)),
+        "{}",
+        text(&out)
+    );
+    assert!(stdout.contains("exposed to the network"), "{}", text(&out));
     assert!(!out.stdout.contains(&0x1b), "{}", text(&out));
     Ok(())
 }
@@ -246,9 +358,21 @@ fn free_port_exits_1_and_kill_on_free_port_exits_0() -> TestResult {
 
 #[test]
 fn bare_whatsup_lists_when_piped() -> TestResult {
-    let out = whatsup(&[])?;
+    let server = listener("127.0.0.1")?;
+    let out = Command::new(env!("CARGO_BIN_EXE_whatsup"))
+        .arg("--all")
+        .env("NO_COLOR", "1")
+        .stdin(Stdio::null())
+        .output()?;
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    // Not a TTY: no TUI note, just the list.
-    assert!(!String::from_utf8_lossy(&out.stdout).contains("TUI"));
+    // Not a TTY: the plain table, no TUI (no alternate screen, no escapes).
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.starts_with("PORT"), "{}", text(&out));
+    assert!(
+        stdout.contains(&format!(":{}", server.port)),
+        "{}",
+        text(&out)
+    );
+    assert!(!out.stdout.contains(&0x1b), "{}", text(&out));
     Ok(())
 }

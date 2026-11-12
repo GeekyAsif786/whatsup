@@ -1,0 +1,11 @@
+---
+source: src/tui/view.rs
+expression: "text(&draw(&app, COLOR, 59, 12))"
+---
+
+
+
+
+                    terminal too small
+                  need 60×12, have 59×12
+                          q quits

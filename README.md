@@ -19,7 +19,27 @@ $ whatsup port 5173       # what is on :5173? exit 0 = in use, 1 = free
 $ whatsup kill :5173      # asks, then stops it; -y skips the prompt, -f force-kills
 ```
 
-`whatsup` on its own currently prints the list (the interactive TUI comes next).
+## Interactive view
+
+`whatsup` on its own opens a live view of the same list (when output is piped, it prints the
+list instead). It refreshes every 2 s, keeps your selection on the same port and PID, and shows
+the command, working directory, addresses and container of the selected row. `--all` and
+`--no-color` / `NO_COLOR` apply here too.
+
+| Key | Action |
+|---|---|
+| `↑` `↓` / `j` `k` | Move the selection (wraps) |
+| `x` / `Del` | Stop what is on the selected port: `y` stops, `Y` force-kills, any other key cancels |
+| `o` / `Enter` | Open `http://localhost:<port>` in your browser (not offered for databases) |
+| `/` | Filter by port, process, kind or command; `Enter` keeps the filter, `Esc` clears it |
+| `a` | Toggle dev servers only / every listener |
+| `r` | Refresh now |
+| `q` / `Esc` / `Ctrl-C` | Quit (`Ctrl-C` works in every mode) |
+
+Stopping works exactly like `whatsup kill`: every owner of the port is stopped, and the results
+(including "still running" and "respawned by ...") appear at the bottom for 4 s. Auto-refresh
+pauses while the stop prompt is open, so rows never move under it. The view needs a terminal
+of at least 60×12.
 
 **Exposed** means the listener is bound to a non-loopback address (`0.0.0.0`, `::`, a LAN IP),
 so other machines on your network can reach it unless a firewall blocks them.

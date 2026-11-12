@@ -11,11 +11,16 @@ use whatsup::model::{Entry, StopMode};
 use whatsup::output::{self, Style};
 use whatsup::scan::Scanner;
 use whatsup::sources::docker::DockerTimeout;
+use whatsup::tui;
 
 /// See what is listening on your dev machine: ports, dev servers, databases
 /// and containers.
 #[derive(Debug, Parser)]
-#[command(name = "whatsup", version)]
+#[command(
+    name = "whatsup",
+    version,
+    after_help = "With no command, opens the interactive view (or prints the list when output is piped)."
+)]
 struct Cli {
     /// Show every listener, not only dev servers
     #[arg(long, global = true)]
@@ -89,12 +94,16 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli, style: Style, stdout_tty: bool) -> anyhow::Result<u8> {
     match cli.command {
-        None => {
-            if stdout_tty {
-                println!("(The interactive TUI arrives in the next version; showing the list.)\n");
-            }
-            list(cli.all, false, style)
+        None if stdout_tty => {
+            tui::run(tui::Options {
+                show_all: cli.all,
+                color: style.color,
+                home: home_dir(),
+                all_note: output::macos_hidden_note(cfg!(target_os = "macos"), is_root(), true),
+            })?;
+            Ok(0)
         }
+        None => list(cli.all, false, style),
         Some(Cmd::List { json }) => list(cli.all, json, style),
         Some(Cmd::Port { port }) => port_detail(port, style),
         Some(Cmd::Kill { port, yes, force }) => kill(port, yes, force, style),
@@ -127,6 +136,12 @@ fn list(all: bool, json: bool, style: Style) -> anyhow::Result<u8> {
         }
     }
     Ok(0)
+}
+
+/// The home directory, used only to shorten paths to `~/...` in the TUI.
+fn home_dir() -> Option<String> {
+    let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    std::env::var(var).ok().filter(|h| !h.is_empty())
 }
 
 /// Whether whatsup runs with root privileges (effective uid 0).
