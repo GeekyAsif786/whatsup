@@ -5,6 +5,7 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::{Mutex, MutexGuard};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -27,6 +28,19 @@ impl Drop for Server {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// Held from "pick a free port" until the server listens on it (and for the
+/// whole free-port test). Tests run in parallel and macOS hands out
+/// ephemeral ports sequentially, so without this a slow-starting server's
+/// port can be picked as "free" by another test before it is bound.
+static PORT_LOCK: Mutex<()> = Mutex::new(());
+
+fn port_lock() -> MutexGuard<'static, ()> {
+    // A test that panicked while holding the lock doesn't make ports unsafe.
+    PORT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// A port that was free a moment ago: bind to port 0, read it, release it.
@@ -52,6 +66,7 @@ fn is_listening(port: u16) -> Result<bool, Box<dyn std::error::Error>> {
 /// is listening. On timeout, the error says whether Python exited, what it
 /// printed, and which ports the socket table did show.
 fn http_server(bind: &str) -> Result<Server, Box<dyn std::error::Error>> {
+    let _ports = port_lock();
     let port = free_port(bind)?;
     let child = Command::new(python())
         .args(["-m", "http.server", &port.to_string(), "--bind", bind])
@@ -220,6 +235,7 @@ fn piped_output_has_no_ansi_even_without_no_color() -> TestResult {
 
 #[test]
 fn free_port_exits_1_and_kill_on_free_port_exits_0() -> TestResult {
+    let _ports = port_lock();
     let p = free_port("127.0.0.1")?.to_string();
     let out = whatsup(&["port", &p])?;
     assert_eq!(out.status.code(), Some(1), "{}", text(&out));
