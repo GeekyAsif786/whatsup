@@ -1,0 +1,91 @@
+name: npm publish
+
+# Publishes the npm packages for a release that already exists on GitHub:
+# downloads its archives, verifies SHA256SUMS and the build attestations,
+# assembles the packages (scripts/npm-assemble.mjs) and publishes the five
+# platform packages, then whatsup-cli.
+#
+# Manual only (Actions → npm publish → Run workflow). Uses npm trusted
+# publishing (OIDC, no token) with provenance. Trusted publishing can only be
+# set up for a package that exists, so the FIRST publish of each package is
+# done by hand; see RELEASE.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish, e.g. v0.1.0
+        required: true
+        type: string
+      dry-run:
+        description: Run npm publish --dry-run (publish nothing)
+        required: true
+        default: true
+        type: boolean
+
+permissions: {}
+
+jobs:
+  publish:
+    name: publish
+    runs-on: ubuntu-latest
+    # The npm trusted publisher is bound to this workflow file and this
+    # environment; add required reviewers to it in the repo settings.
+    environment: npm
+    permissions:
+      contents: read # check out the tag, download the release assets
+      attestations: read # gh attestation verify
+      id-token: write # npm trusted publishing and provenance
+    env:
+      TAG: ${{ inputs.tag }}
+      DRY_RUN: ${{ inputs.dry-run }}
+    steps:
+      - name: Check the tag
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$TAG' is not a tag like v0.1.0"
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: npm supports trusted publishing
+        run: |
+          npm --version
+          node -e 'const [a,b]=process.argv[1].split(".").map(Number); if (a<11||(a===11&&b<5)) { console.error("npm >= 11.5 needed for trusted publishing"); process.exit(1); }' "$(npm --version)"
+      - name: Download and verify the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir dist
+          gh release download "$TAG" --dir dist --pattern 'whatsup-v*' --pattern SHA256SUMS
+          (cd dist && sha256sum --check --strict SHA256SUMS)
+          for f in dist/whatsup-v*; do
+            gh attestation verify "$f" --repo "$GH_REPO" \
+              --signer-workflow "$GH_REPO/.github/workflows/release.yml" >/dev/null
+            echo "attested: $f"
+          done
+      - name: Assemble
+        run: node scripts/npm-assemble.mjs --version "${TAG#v}" --archives dist --out npm-dist
+      - name: Publish
+        run: |
+          flags=(--access public --provenance)
+          [ "$DRY_RUN" = true ] && flags+=(--dry-run)
+          version="${TAG#v}"
+          # Platform packages first: whatsup-cli is useless without them.
+          for dir in darwin-arm64 darwin-x64 linux-arm64 linux-x64 win32-x64 whatsup-cli; do
+            name=$(node -p "require('./npm-dist/$dir/package.json').name")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version is already published; skipping"
+              continue
+            fi
+            echo "::group::npm publish $name@$version"
+            (cd "npm-dist/$dir" && npm publish "${flags[@]}")
+            echo "::endgroup::"
+          done

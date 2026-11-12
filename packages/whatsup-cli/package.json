@@ -1,0 +1,39 @@
+{
+  "name": "whatsup-cli",
+  "version": "0.1.0",
+  "description": "See what is listening on your dev machine: ports, dev servers, databases and containers",
+  "keywords": [
+    "ports",
+    "port",
+    "kill-port",
+    "tui",
+    "devtools",
+    "docker",
+    "lsof",
+    "process"
+  ],
+  "homepage": "https://github.com/GeekyAsif786/whatsup#readme",
+  "bugs": "https://github.com/GeekyAsif786/whatsup/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GeekyAsif786/whatsup.git",
+    "directory": "packages/whatsup-cli"
+  },
+  "license": "MIT",
+  "bin": {
+    "whatsup": "bin/whatsup.js"
+  },
+  "files": [
+    "bin/whatsup.js"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "@whatsup-cli/darwin-arm64": "0.1.0",
+    "@whatsup-cli/darwin-x64": "0.1.0",
+    "@whatsup-cli/linux-x64": "0.1.0",
+    "@whatsup-cli/linux-arm64": "0.1.0",
+    "@whatsup-cli/win32-x64": "0.1.0"
+  }
+}

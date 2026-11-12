@@ -1,0 +1,22 @@
+{
+  "name": "@whatsup-cli/darwin-arm64",
+  "version": "0.1.0",
+  "description": "The macOS arm64 (Apple silicon) binary for whatsup-cli. Install whatsup-cli, not this.",
+  "homepage": "https://github.com/GeekyAsif786/whatsup#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GeekyAsif786/whatsup.git",
+    "directory": "packages/darwin-arm64"
+  },
+  "license": "MIT",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin/whatsup"
+  ],
+  "preferUnplugged": true
+}
