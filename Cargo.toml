@@ -1,0 +1,28 @@
+[package]
+name = "whatsup-cli"
+version = "0.1.0"
+edition = "2024"
+description = "See what is listening on your dev machine: ports, dev servers, databases and containers"
+license = "MIT"
+repository = "https://github.com/GeekyAsif786/whatsup"
+readme = "README.md"
+
+[[bin]]
+name = "whatsup"
+path = "src/main.rs"
+
+[lib]
+name = "whatsup"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+serde = { version = "1.0.229", features = ["derive"] }
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+
+[dev-dependencies]
+serde_json = "1.0.154"
