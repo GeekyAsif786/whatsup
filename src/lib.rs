@@ -5,3 +5,4 @@
 //! and integration tests can reach it.
 
 pub mod model;
+pub mod sources;
