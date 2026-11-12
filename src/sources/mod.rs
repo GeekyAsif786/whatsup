@@ -5,6 +5,8 @@
 //! (netstat2, sysinfo, docker CLI) arrive in M1; tests use the in-memory fakes
 //! in [`fake`].
 
+pub mod docker;
+
 use std::collections::HashMap;
 use std::net::IpAddr;
 
