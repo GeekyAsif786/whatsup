@@ -19,6 +19,7 @@ path = "src/lib.rs"
 anyhow = "1.0.104"
 netstat2 = "0.11.2"
 serde = { version = "1.0.229", features = ["derive"] }
+sysinfo = { version = "0.40.3", default-features = false, features = ["system"] }
 
 [profile.release]
 lto = true

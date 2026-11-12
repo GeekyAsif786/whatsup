@@ -2,10 +2,11 @@
 //!
 //! Steps 1–3 of the pipeline (enumerate, attribute, enrich) are
 //! platform-specific, so they sit behind these traits. Real implementations
-//! (netstat2, sysinfo, docker CLI) arrive in M1; tests use the in-memory fakes
+//! (netstat2, sysinfo, docker CLI) live in the submodules; tests use the fakes
 //! in [`fake`].
 
 pub mod docker;
+pub mod processes;
 pub mod sockets;
 
 use std::collections::HashMap;
@@ -35,6 +36,8 @@ pub struct ProcInfo {
     pub user_id: Option<String>,
     pub uptime_secs: Option<u64>,
     pub memory_mb: Option<u64>,
+    /// Parent PID, when the OS reports one.
+    pub parent: Option<u32>,
 }
 
 /// Enumerates TCP sockets in LISTEN state (step 1 and 2).
@@ -45,7 +48,8 @@ pub trait SocketSource {
 /// Looks up process details by PID (step 3).
 pub trait ProcessSource {
     /// Returns info for each requested PID that still exists. PIDs that have
-    /// exited are left out rather than reported as errors.
+    /// exited (including zombies waiting to be reaped) are left out rather
+    /// than reported as errors.
     fn processes(&mut self, pids: &[u32]) -> anyhow::Result<HashMap<u32, ProcInfo>>;
 }
 
