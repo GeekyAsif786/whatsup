@@ -1,19 +1,22 @@
 //! Docker container source (DESIGN.md section 7.3).
 //!
 //! Runs `docker ps --format {{json .}}` (as an argument array, never through
-//! a shell), parses one JSON object per line, and maps every published host
-//! TCP port to its container. Results are cached for 5 s. If docker is
-//! missing, not running, or fails, the source is silently empty.
+//! a shell) with a 2 s timeout, parses one JSON object per line, and maps
+//! every published host TCP port to its container. Results are cached for
+//! 5 s. If docker is missing, not running, or fails, the source is silently
+//! empty; if it doesn't answer in time, it returns [`DockerTimeout`].
 
 use std::collections::HashMap;
+use std::fmt;
 use std::net::IpAddr;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
 use super::{ContainerSource, PublishedContainer};
 use crate::model::Container;
+use crate::run::{RunError, human, run_with_timeout};
 
 /// How long one `docker ps` result is reused (section 15: ≤ 1 call per 5 s).
 pub const CACHE_TTL: Duration = Duration::from_secs(5);
@@ -142,30 +145,60 @@ pub fn parse_ps_output(out: &str) -> HashMap<u16, PublishedContainer> {
     map
 }
 
-/// Runs `docker ps` and returns its stdout, or `None` on any failure
-/// (docker not installed, daemon not running, non-zero exit, bad UTF-8).
-fn run_docker_ps() -> Option<String> {
-    let out = Command::new("docker")
-        .args(["ps", "--format", "{{json .}}"])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
+/// How long `docker ps` may take before containers are treated as absent.
+/// Docker Desktop on macOS in particular can hang instead of failing.
+pub const PS_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// `docker ps` did not answer within [`PS_TIMEOUT`]. Returned as the error of
+/// [`DockerContainers::containers`]; the scan goes on without containers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DockerTimeout;
+
+impl fmt::Display for DockerTimeout {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Docker didn't respond within {}; containers not shown",
+            human(PS_TIMEOUT)
+        )
     }
-    String::from_utf8(out.stdout).ok()
 }
 
-/// Produces `docker ps` output, or `None` on failure. Boxed so tests can
-/// swap in a fake runner.
-type Runner = Box<dyn FnMut() -> Option<String>>;
+impl std::error::Error for DockerTimeout {}
+
+/// Outcome of one `docker ps` run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PsRun {
+    /// Its stdout.
+    Output(String),
+    /// Docker not installed, daemon not running, non-zero exit, bad UTF-8.
+    Failed,
+    /// Still running after [`PS_TIMEOUT`] (killed and reaped).
+    TimedOut,
+}
+
+/// Runs `docker ps --format {{json .}}` with a [`PS_TIMEOUT`] deadline.
+fn run_docker_ps() -> PsRun {
+    let cmd = &mut Command::new("docker");
+    match run_with_timeout(cmd.args(["ps", "--format", "{{json .}}"]), PS_TIMEOUT) {
+        Err(RunError::Timeout(_)) => PsRun::TimedOut,
+        Err(RunError::Io(_)) => PsRun::Failed,
+        Ok(out) if !out.status.success() => PsRun::Failed,
+        Ok(out) => String::from_utf8(out.stdout).map_or(PsRun::Failed, PsRun::Output),
+    }
+}
+
+/// Produces one `docker ps` outcome. Boxed so tests can swap in a fake.
+type Runner = Box<dyn FnMut() -> PsRun>;
+
+/// A cached result: the port map, or the fact that docker timed out.
+type Cached = Result<HashMap<u16, PublishedContainer>, DockerTimeout>;
 
 /// [`ContainerSource`] backed by the docker CLI, with a 5 s cache.
 pub struct DockerContainers {
     run: Runner,
     ttl: Duration,
-    cache: Option<(Instant, HashMap<u16, PublishedContainer>)>,
+    cache: Option<(Instant, Cached)>,
 }
 
 impl DockerContainers {
@@ -190,18 +223,29 @@ impl Default for DockerContainers {
 }
 
 impl ContainerSource for DockerContainers {
+    /// The published ports, empty when docker is missing or fails, or
+    /// `Err(DockerTimeout)` when it didn't answer in time. Every outcome,
+    /// timeouts included, is cached for the TTL, so a hung Docker costs at
+    /// most one 2 s wait per 5 s.
     fn containers(&mut self) -> anyhow::Result<HashMap<u16, PublishedContainer>> {
-        if let Some((at, map)) = &self.cache
-            && at.elapsed() < self.ttl
-        {
-            return Ok(map.clone());
-        }
-        // Failures are cached too, so a missing docker costs one spawn per TTL.
-        let map = (self.run)()
-            .map(|s| parse_ps_output(&s))
-            .unwrap_or_default();
-        self.cache = Some((Instant::now(), map.clone()));
-        Ok(map)
+        let fresh = self
+            .cache
+            .as_ref()
+            .filter(|(at, _)| at.elapsed() < self.ttl)
+            .map(|(_, cached)| cached.clone());
+        let result = match fresh {
+            Some(cached) => cached,
+            None => {
+                let result = match (self.run)() {
+                    PsRun::Output(s) => Ok(parse_ps_output(&s)),
+                    PsRun::Failed => Ok(HashMap::new()),
+                    PsRun::TimedOut => Err(DockerTimeout),
+                };
+                self.cache = Some((Instant::now(), result.clone()));
+                result
+            }
+        };
+        Ok(result?)
     }
 }
 
@@ -401,19 +445,19 @@ mod tests {
     }
 
     /// A runner that counts calls and returns `output`.
-    fn counting(output: Option<&'static str>) -> (Rc<Cell<u32>>, Runner) {
+    fn counting(output: PsRun) -> (Rc<Cell<u32>>, Runner) {
         let calls = Rc::new(Cell::new(0));
         let c = Rc::clone(&calls);
         let run = Box::new(move || {
             c.set(c.get() + 1);
-            output.map(str::to_string)
+            output.clone()
         });
         (calls, run)
     }
 
     #[test]
     fn results_are_cached_within_ttl() -> anyhow::Result<()> {
-        let (calls, run) = counting(Some(PS_FIXTURE));
+        let (calls, run) = counting(PsRun::Output(PS_FIXTURE.to_string()));
         let mut src = DockerContainers::with_runner(run, Duration::from_secs(60));
         assert_eq!(src.containers()?.len(), 2);
         assert_eq!(src.containers()?.len(), 2);
@@ -423,7 +467,7 @@ mod tests {
 
     #[test]
     fn cache_expires_after_ttl() -> anyhow::Result<()> {
-        let (calls, run) = counting(Some(PS_FIXTURE));
+        let (calls, run) = counting(PsRun::Output(PS_FIXTURE.to_string()));
         let mut src = DockerContainers::with_runner(run, Duration::ZERO);
         src.containers()?;
         src.containers()?;
@@ -433,11 +477,44 @@ mod tests {
 
     #[test]
     fn docker_failure_is_silently_empty_and_cached() -> anyhow::Result<()> {
-        let (calls, run) = counting(None);
+        let (calls, run) = counting(PsRun::Failed);
         let mut src = DockerContainers::with_runner(run, Duration::from_secs(60));
         assert!(src.containers()?.is_empty());
         assert!(src.containers()?.is_empty());
         assert_eq!(calls.get(), 1);
         Ok(())
+    }
+
+    #[test]
+    fn timeout_is_an_error_and_is_cached() {
+        let (calls, run) = counting(PsRun::TimedOut);
+        let mut src = DockerContainers::with_runner(run, Duration::from_secs(60));
+        for _ in 0..3 {
+            let err = src.containers().err();
+            assert!(
+                err.as_ref()
+                    .and_then(|e| e.downcast_ref::<DockerTimeout>())
+                    .is_some(),
+                "{err:?}"
+            );
+        }
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn timeout_cache_expires_too() {
+        let (calls, run) = counting(PsRun::TimedOut);
+        let mut src = DockerContainers::with_runner(run, Duration::ZERO);
+        let _ = src.containers();
+        let _ = src.containers();
+        assert_eq!(calls.get(), 2);
+    }
+
+    #[test]
+    fn timeout_message() {
+        assert_eq!(
+            DockerTimeout.to_string(),
+            "Docker didn't respond within 2 s; containers not shown"
+        );
     }
 }

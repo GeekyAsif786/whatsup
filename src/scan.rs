@@ -10,13 +10,13 @@
 //!    all get a synthesized container row.
 //! 4. Sort dev first, then by port.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
 
 use crate::classify::{classify, is_container_plumbing};
 use crate::filter::{exposure, is_dev};
 use crate::model::{Entry, Kind};
-use crate::sources::docker::DockerContainers;
+use crate::sources::docker::{DockerContainers, DockerTimeout};
 use crate::sources::processes::SysinfoProcesses;
 use crate::sources::sockets::NativeSockets;
 use crate::sources::{ContainerSource, ProcInfo, ProcessSource, PublishedContainer, SocketSource};
@@ -29,6 +29,8 @@ pub struct Scanner {
     pub containers: Box<dyn ContainerSource>,
     /// User id of the process running whatsup, for the dev heuristic.
     self_user: Option<String>,
+    /// Whether `docker ps` timed out during the last scan.
+    docker_timed_out: bool,
 }
 
 impl Scanner {
@@ -43,7 +45,14 @@ impl Scanner {
             processes,
             containers,
             self_user,
+            docker_timed_out: false,
         }
+    }
+
+    /// True when the last [`Scanner::scan`] went without containers because
+    /// `docker ps` didn't answer in time (see [`DockerTimeout`]).
+    pub fn docker_timed_out(&self) -> bool {
+        self.docker_timed_out
     }
 
     /// A scanner over the real OS sources.
@@ -82,8 +91,18 @@ impl Scanner {
             .into_iter()
             .collect();
         let procs = self.processes.processes(&pids)?;
-        // Docker problems never break a scan (section 7.3).
-        let containers = self.containers.containers().unwrap_or_default();
+        // Docker problems never break a scan (section 7.3); a timeout is
+        // remembered so the CLI can say containers are missing.
+        let containers = match self.containers.containers() {
+            Ok(map) => {
+                self.docker_timed_out = false;
+                map
+            }
+            Err(e) => {
+                self.docker_timed_out = e.downcast_ref::<DockerTimeout>().is_some();
+                HashMap::new()
+            }
+        };
 
         // Join containers while addresses are still IpAddrs, so merged rows
         // get their exposure from the union of addresses.
@@ -294,7 +313,7 @@ mod tests {
             Box::new(FakeProcesses::new(procs)),
             Box::new(FakeContainers {
                 by_port: containers,
-                fail: false,
+                ..FakeContainers::default()
             }),
             Some(ME.to_string()),
         )
@@ -474,6 +493,36 @@ mod tests {
             Some(ME.to_string()),
         );
         assert_eq!(s.scan()?.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn docker_timeout_is_reported_but_the_scan_goes_on() -> anyhow::Result<()> {
+        let mut s = Scanner::new(
+            Box::new(FakeSockets {
+                listeners: vec![l("127.0.0.1", 3000, Some(10))],
+            }),
+            Box::new(FakeProcesses::new([proc(10, "node", "node server.js", ME)])),
+            Box::new(FakeContainers {
+                timed_out: true,
+                ..FakeContainers::default()
+            }),
+            Some(ME.to_string()),
+        );
+        assert_eq!(s.scan()?.len(), 1);
+        assert!(s.docker_timed_out());
+        Ok(())
+    }
+
+    #[test]
+    fn other_docker_failures_are_silent() -> anyhow::Result<()> {
+        let mut s = scanner(vec![], vec![], HashMap::new());
+        s.containers = Box::new(FakeContainers {
+            fail: true,
+            ..FakeContainers::default()
+        });
+        s.scan()?;
+        assert!(!s.docker_timed_out());
         Ok(())
     }
 

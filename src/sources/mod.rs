@@ -112,12 +112,17 @@ pub mod fake {
     pub struct FakeContainers {
         pub by_port: HashMap<u16, PublishedContainer>,
         pub fail: bool,
+        /// Return the docker timeout error instead.
+        pub timed_out: bool,
     }
 
     impl ContainerSource for FakeContainers {
         fn containers(&mut self) -> anyhow::Result<HashMap<u16, PublishedContainer>> {
             if self.fail {
                 anyhow::bail!("docker is not available");
+            }
+            if self.timed_out {
+                return Err(super::docker::DockerTimeout.into());
             }
             Ok(self.by_port.clone())
         }
@@ -181,7 +186,7 @@ mod tests {
         };
         let mut ok = FakeContainers {
             by_port: HashMap::from([(5432, db.clone())]),
-            fail: false,
+            ..FakeContainers::default()
         };
         assert_eq!(ok.containers()?.get(&5432), Some(&db));
 

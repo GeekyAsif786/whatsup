@@ -209,6 +209,14 @@ every published port with no listener row at all, the scanner adds a container r
 If docker is missing, not running or fails, the container source is silently empty. Results,
 failures included, are cached for 5 s.
 
+**Timeouts (normative).** whatsup never hangs on an external command: every one runs with a
+deadline (stdin closed, stdout/stderr drained on their own threads, and on timeout the child is
+killed and reaped). `docker ps` gets **2 s** (Docker Desktop on macOS often hangs instead of
+failing). On timeout, containers are treated as absent, and `list` / `port` print one line to
+stderr: `Docker didn't respond within 2 s; containers not shown`. The timeout result is cached
+for the same 5 s window, so a hung Docker costs at most one 2 s wait per 5 s. `docker stop`
+timeouts are in section 11.1.
+
 ## 8. Classification
 
 An ordered rule table; **the first match wins**. Order matters because frameworks run on generic

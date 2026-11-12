@@ -10,6 +10,7 @@ use whatsup::actions::{OsControl, Timing, stop_port};
 use whatsup::model::{Entry, StopMode};
 use whatsup::output::{self, Style};
 use whatsup::scan::Scanner;
+use whatsup::sources::docker::DockerTimeout;
 
 /// See what is listening on your dev machine: ports, dev servers, databases
 /// and containers.
@@ -100,8 +101,17 @@ fn run(cli: Cli, style: Style, stdout_tty: bool) -> anyhow::Result<u8> {
     }
 }
 
+/// Scans, then prints the docker-timeout note (section 7.3) to stderr.
+fn scan_with_notes(scanner: &mut Scanner) -> anyhow::Result<Vec<Entry>> {
+    let entries = scanner.scan()?;
+    if scanner.docker_timed_out() {
+        eprintln!("{DockerTimeout}");
+    }
+    Ok(entries)
+}
+
 fn list(all: bool, json: bool, style: Style) -> anyhow::Result<u8> {
-    let entries = Scanner::system()?.scan()?;
+    let entries = scan_with_notes(&mut Scanner::system()?)?;
     let total = entries.len();
     let shown: Vec<Entry> = entries.into_iter().filter(|e| all || e.dev).collect();
     if json {
@@ -124,7 +134,10 @@ fn on_port(scanner: &mut Scanner, port: u16) -> anyhow::Result<Vec<Entry>> {
 }
 
 fn port_detail(port: u16, style: Style) -> anyhow::Result<u8> {
-    let entries = on_port(&mut Scanner::system()?, port)?;
+    let entries: Vec<Entry> = scan_with_notes(&mut Scanner::system()?)?
+        .into_iter()
+        .filter(|e| e.port == port)
+        .collect();
     if entries.is_empty() {
         println!(":{port} is free");
         return Ok(1);
