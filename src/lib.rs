@@ -8,5 +8,6 @@ pub mod actions;
 pub mod classify;
 pub mod filter;
 pub mod model;
+pub mod output;
 pub mod scan;
 pub mod sources;

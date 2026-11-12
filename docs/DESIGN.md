@@ -384,6 +384,21 @@ Usage errors exit 2 (clap's default). Output never contains ANSI colour when pip
 `whatsup kill 3000 && npm start` must not continue; its message names the parent that restarted
 it. "Nothing listening on the port" is decided before `stop()` runs and exits 0.
 
+The confirmation prompt (`kill` without `-y`) has three more outcomes, none of which stop anything:
+
+| Situation | Message | Exit code |
+|---|---|---|
+| Declined at the prompt (anything but `y`/`yes`, including EOF) | `aborted, nothing stopped` | 1 |
+| Ctrl-C at the prompt | — | 130 (standard for SIGINT) |
+| stdin is not a terminal and no `-y` (a usage error, not a decision) | `not a terminal: pass -y to confirm` | 2 (same as clap usage errors) |
+
+When several PIDs own the port (e.g. one on `127.0.0.1` and another on `::1`, or `SO_REUSEPORT`
+workers), one prompt lists them all and each is stopped in turn, one result line per owner. The
+exit code is the worst: 1 if any `Failed`, else 3 if any `StillRunning` / `Respawned`, else 0.
+The respawn check runs once, after all owners, and ignores every original PID. An owner that
+exits while an earlier one is being stopped (a worker going down with its master) counts as
+`Stopped`.
+
 ## 13. TUI specification
 
 ```text
