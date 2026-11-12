@@ -56,6 +56,8 @@ fn http_server(bind: &str) -> Result<Server, Box<dyn std::error::Error>> {
     let child = Command::new(python())
         .args(["-m", "http.server", &port.to_string(), "--bind", bind])
         .current_dir(std::env::temp_dir())
+        // Diagnostics only: lets a SIGABRT on timeout dump Python's stack.
+        .env("PYTHONFAULTHANDLER", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         // http.server only logs requests here and we make none, so the pipe
@@ -67,7 +69,20 @@ fn http_server(bind: &str) -> Result<Server, Box<dyn std::error::Error>> {
     while !is_listening(port)? {
         let exited = server.child.try_wait()?;
         if exited.is_some() || Instant::now() > deadline {
+            let mut lsof = String::new();
             if exited.is_none() {
+                let pid = server.child.id().to_string();
+                if cfg!(unix) {
+                    // Where is it stuck? Socket states, then a stack dump.
+                    if let Ok(o) = Command::new("lsof")
+                        .args(["-nP", "-a", "-i", "-p", &pid])
+                        .output()
+                    {
+                        lsof = String::from_utf8_lossy(&o.stdout).into_owned();
+                    }
+                    let _ = Command::new("kill").args(["-ABRT", &pid]).status();
+                    sleep(Duration::from_millis(500));
+                }
                 let _ = server.child.kill();
             }
             let status = server.child.wait()?;
@@ -80,7 +95,7 @@ fn http_server(bind: &str) -> Result<Server, Box<dyn std::error::Error>> {
             seen.dedup();
             return Err(format!(
                 "http.server on {bind}:{port} never came up (exited: {}, status {status}); \
-                 stderr: {stderr:?}; listening ports seen: {seen:?}",
+                 stderr: {stderr}\nlsof: {lsof}\nlistening ports seen: {seen:?}",
                 exited.is_some()
             )
             .into());
