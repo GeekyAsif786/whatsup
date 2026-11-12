@@ -2,7 +2,7 @@
 //! scanner, and the built `whatsup` binary. Run in CI on Linux, macOS and
 //! Windows. Needs Python 3 on PATH (`python3`, or `python` on Windows).
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::process::{Child, Command, Output, Stdio};
 use std::thread::sleep;
@@ -65,7 +65,8 @@ fn http_server(bind: &str) -> Result<Server, Box<dyn std::error::Error>> {
         .stderr(Stdio::piped())
         .spawn()?;
     let mut server = Server { child, port };
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(60);
     while !is_listening(port)? {
         let exited = server.child.try_wait()?;
         if exited.is_some() || Instant::now() > deadline {
@@ -101,6 +102,15 @@ fn http_server(bind: &str) -> Result<Server, Box<dyn std::error::Error>> {
             .into());
         }
         sleep(Duration::from_millis(100));
+    }
+    let took = started.elapsed();
+    if took > Duration::from_secs(5) {
+        // Written straight to stderr (not eprintln!) so it shows in CI logs
+        // even when the test passes.
+        let _ = writeln!(
+            std::io::stderr(),
+            "[slow] http.server on {bind}:{port} took {took:?} to listen"
+        );
     }
     Ok(server)
 }

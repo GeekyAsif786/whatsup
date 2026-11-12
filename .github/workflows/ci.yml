@@ -44,7 +44,13 @@ jobs:
           sudo hostname whatsup-ci
           echo "127.0.0.1 whatsup-ci" | sudo tee -a /etc/hosts
           sudo dscacheutil -flushcache
-          time python3 -c "import socket; print(socket.getfqdn('0.0.0.0'))"
+          python3 - <<'PY'
+          import socket, time
+          for host in ("0.0.0.0", "127.0.0.1", "0.0.0.0"):
+              t = time.time()
+              print(host, "->", socket.getfqdn(host), "%.2fs" % (time.time() - t))
+          print("gethostname:", socket.gethostname())
+          PY
       - name: Test
         run: cargo test --locked
 
