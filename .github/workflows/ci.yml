@@ -39,6 +39,32 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test --locked
+      # The npm launcher, the npm package assembler, the label sync script
+      # and the community-file checks (Node is preinstalled on every runner; no npm install).
+      - name: Node scripts
+        run: >-
+          node --test
+          packages/whatsup-cli/test/launcher.test.js
+          scripts/npm-assemble.test.mjs
+          scripts/sync-labels.test.mjs
+          scripts/community.test.mjs
+      # DESIGN.md section 15: the release binary (LTO, stripped by the
+      # release profile) must stay under 5 MB.
+      - name: Release binary size
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cargo build --release --locked
+          bin=target/release/whatsup
+          file "$bin"
+          file "$bin" | grep -q ', stripped' || { echo "::error::$bin is not stripped"; exit 1; }
+          size=$(stat -c %s "$bin")
+          limit=5000000
+          echo "stripped release binary: $size bytes (limit $limit)"
+          echo "Release binary (x86_64 Linux, stripped): $size bytes, limit $limit" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$size" -ge "$limit" ]; then
+            echo "::error::release binary is $size bytes, over the 5 MB budget"
+            exit 1
+          fi
 
   audit:
     name: audit
