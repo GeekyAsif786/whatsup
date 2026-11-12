@@ -1,0 +1,247 @@
+name: Release
+
+# A pushed tag v* builds the five targets (DESIGN.md section 17.1), writes
+# SHA256SUMS, attests every archive and creates the GitHub Release.
+#
+# Anything else is a dry run that builds and packages everything but
+# publishes nothing (no release, no attestation): run it from the Actions
+# tab (workflow_dispatch), and it runs on pull requests that touch the
+# release files. The archives stay downloadable as workflow artifacts.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - packaging/**
+      - packages/**
+      - scripts/npm-assemble.mjs
+      - Cargo.toml
+      - Cargo.lock
+
+# Nothing by default; each job asks for what it needs.
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Version from Cargo.toml (and check the tag matches)
+        id: version
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
+          if [ -z "$version" ]; then echo "::error::no version in Cargo.toml"; exit 1; fi
+          publish=false
+          if [ "$EVENT" = push ] && [ "$REF_TYPE" = tag ]; then
+            if [ "$REF_NAME" != "v$version" ]; then
+              echo "::error::tag $REF_NAME does not match Cargo.toml version $version"
+              exit 1
+            fi
+            publish=true
+          fi
+          {
+            echo "version=$version"
+            echo "tag=v$version"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+          echo "version $version, publish $publish"
+
+  build:
+    name: build (${{ matrix.target }})
+    needs: plan
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest supported Ubuntu runners, so the binaries need only
+          # glibc 2.35 (Ubuntu 22.04, Debian 12 has 2.36).
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
+          - target: aarch64-apple-darwin
+            os: macos-15
+          # Cross-compiled on the arm64 runner: Apple's toolchain builds
+          # both architectures.
+          - target: x86_64-apple-darwin
+            os: macos-15
+          - target: x86_64-pc-windows-msvc
+            os: windows-2025
+            # Link the C runtime statically: no "VCRUNTIME140.dll was not
+            # found" on a fresh Windows install.
+            rustflags: -C target-feature=+crt-static
+    env:
+      TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # No build cache here on purpose: release binaries are built from a
+      # clean slate, so a poisoned cache entry can't end up in a release.
+      - name: Install toolchain
+        shell: bash
+        run: |
+          rustup toolchain install
+          rustup target add "$TARGET"
+          rustc --version --verbose
+      - name: Build
+        shell: bash
+        run: cargo build --release --locked --target "$TARGET"
+      - name: Package
+        id: package
+        shell: bash
+        run: |
+          exe=""
+          [[ "$TARGET" == *windows* ]] && exe=".exe"
+          name="whatsup-v${VERSION}-${TARGET}"
+          bin="target/${TARGET}/release/whatsup${exe}"
+          mkdir -p "dist/${name}"
+          cp "$bin" README.md LICENSE "dist/${name}/"
+          cd dist
+          if [ -n "$exe" ]; then
+            7z a -tzip -bso0 "${name}.zip" "${name}"
+            archive="${name}.zip"
+          else
+            tar -czf "${name}.tar.gz" "${name}"
+            archive="${name}.tar.gz"
+          fi
+          bin_bytes=$(wc -c < "${name}/whatsup${exe}" | tr -d ' ')
+          archive_bytes=$(wc -c < "$archive" | tr -d ' ')
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          echo "| \`$TARGET\` | $bin_bytes | \`$archive\` | $archive_bytes |" > "size-${TARGET}.md"
+          echo "binary $bin_bytes bytes, $archive $archive_bytes bytes"
+      - name: Smoke test
+        # Every target runs on its own runner except x86_64 macOS, which
+        # runs under Rosetta 2 on the arm64 runner.
+        shell: bash
+        run: |
+          exe=""
+          [[ "$TARGET" == *windows* ]] && exe=".exe"
+          "dist/whatsup-v${VERSION}-${TARGET}/whatsup${exe}" --version | tee version.txt
+          grep -qx "whatsup ${VERSION}" version.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: archive-${{ matrix.target }}
+          path: |
+            dist/${{ steps.package.outputs.archive }}
+            dist/size-${{ matrix.target }}.md
+          if-no-files-found: error
+
+  checksums:
+    name: checksums
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: archive-*
+          path: dist
+          merge-multiple: true
+      - name: SHA256SUMS
+        run: |
+          cd dist
+          count=$(find . -maxdepth 1 \( -name 'whatsup-v*.tar.gz' -o -name 'whatsup-v*.zip' \) | wc -l)
+          if [ "$count" -ne 5 ]; then echo "::error::expected 5 archives, found $count"; exit 1; fi
+          sha256sum whatsup-v*.tar.gz whatsup-v*.zip > SHA256SUMS
+          sha256sum --check --strict SHA256SUMS
+          cat SHA256SUMS
+      - name: Summary
+        run: |
+          {
+            echo "## whatsup v${VERSION} archives"
+            echo
+            echo "| Target | Binary (bytes) | Archive | Archive (bytes) |"
+            echo "|---|---:|---|---:|"
+            cat dist/size-*.md
+            echo
+            echo '```'
+            cat dist/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      # Exercise the Homebrew and npm packaging on the real archives, so a
+      # broken template or script fails here, not on release day.
+      - name: Homebrew formula
+        run: |
+          packaging/homebrew/fill-formula.sh "$VERSION" dist/SHA256SUMS > dist/whatsup.rb
+          ruby -c dist/whatsup.rb
+          cat dist/whatsup.rb
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: npm packages
+        run: |
+          node scripts/npm-assemble.mjs --version "$VERSION" --archives dist --out npm-dist
+          for dir in npm-dist/*/; do (cd "$dir" && npm pack --dry-run 2>&1 | tail -n 8); done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-files
+          path: |
+            dist/SHA256SUMS
+            dist/whatsup.rb
+            dist/whatsup-v*
+          if-no-files-found: error
+
+  release:
+    name: release
+    needs: [plan, checksums]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and upload its assets
+      id-token: write # sign the attestations (Sigstore)
+      attestations: write # store the attestations
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-files
+          path: dist
+      - name: Verify checksums
+        run: cd dist && sha256sum --check --strict SHA256SUMS
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/whatsup-v*.tar.gz
+            dist/whatsup-v*.zip
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          prerelease=()
+          [[ "$TAG" == *-* ]] && prerelease=(--prerelease)
+          gh release create "$TAG" --verify-tag --generate-notes --title "whatsup $TAG" \
+            "${prerelease[@]}" \
+            dist/whatsup-v*.tar.gz dist/whatsup-v*.zip dist/SHA256SUMS
