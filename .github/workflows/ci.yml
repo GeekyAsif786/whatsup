@@ -30,6 +30,16 @@ jobs:
         run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
+      # The integration tests run `python -m http.server --bind 0.0.0.0`.
+      # http.server calls socket.getfqdn() between bind() and listen(); for
+      # 0.0.0.0 that resolves the machine's hostname, which can stall for
+      # minutes on macOS runners, so the socket isn't listening yet. Resolve
+      # the hostname locally.
+      - name: Resolve hostname locally (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          echo "127.0.0.1 $(hostname)" | sudo tee -a /etc/hosts
+          sudo dscacheutil -flushcache
       - name: Test
         run: cargo test --locked
 
