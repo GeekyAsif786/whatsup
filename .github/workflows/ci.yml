@@ -24,8 +24,15 @@ jobs:
         with:
           persist-credentials: false
       # rustup reads rust-toolchain.toml and installs stable + rustfmt + clippy.
-      - name: Show toolchain
-        run: rustup show active-toolchain --verbose
+      # Installed explicitly (not on first cargo use) so rust-cache below
+      # keys the cache on the right rustc version.
+      - name: Install toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain --verbose
+      # Caches ~/.cargo (registry, git deps) and target/ dependencies, keyed
+      # on OS, rustc version and Cargo.lock.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
@@ -40,6 +47,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install toolchain
+        run: rustup toolchain install
+      # Caches ~/.cargo, including the cargo-audit binary installed below,
+      # so a cache hit turns the install into a no-op.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install cargo-audit
         run: cargo install cargo-audit --version 0.23.0 --locked
       - name: Audit
