@@ -120,13 +120,14 @@ const CONTAINER_PLUMBING: &[&str] = &[
     "com.docker.backend",
     "vpnkit",
     "wslrelay",
+    "rootlessport",
     "limactl",
     "colima",
     "ssh",
 ];
 
 /// True when `name` is a process that forwards ports for a container runtime
-/// (Docker, OrbStack, colima/lima).
+/// (Docker, rootless Docker, OrbStack, colima/lima).
 pub fn is_container_plumbing(name: &str) -> bool {
     let name = normalize_name(name);
     CONTAINER_PLUMBING.contains(&name.as_str()) || name.starts_with("orbstack")
@@ -542,6 +543,7 @@ mod tests {
             "com.docker.backend.exe",
             "vpnkit",
             "wslrelay.exe",
+            "rootlessport",
             "OrbStack Helper",
             "limactl",
             "colima",

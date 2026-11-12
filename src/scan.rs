@@ -415,6 +415,23 @@ mod tests {
         Ok(())
     }
 
+    /// Rootless Docker publishes ports through `rootlessport`, running as
+    /// the user, so it is visible and must be replaced by the container.
+    #[test]
+    fn rootless_docker_owner_is_replaced_by_container() -> anyhow::Result<()> {
+        let mut s = scanner(
+            vec![l("0.0.0.0", 5432, Some(2001))],
+            vec![proc(2001, "rootlessport", "rootlessport", ME)],
+            HashMap::from([(5432, db(&["0.0.0.0"]))]),
+        );
+        let e = s.scan()?;
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].pid, Some(2001));
+        assert_eq!(e[0].process, "db (postgres:16)");
+        assert_eq!(e[0].kind, Kind::Docker);
+        Ok(())
+    }
+
     #[test]
     fn visible_non_plumbing_owner_is_not_joined() -> anyhow::Result<()> {
         let mut s = scanner(

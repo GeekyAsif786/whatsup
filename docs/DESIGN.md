@@ -190,7 +190,7 @@ replaced with the container.
 only when the row's owner is:
 
 - (a) container plumbing, by process name (lowercase, `.exe` stripped): `docker-proxy`,
-  `com.docker.backend`, `vpnkit`, `wslrelay`, `limactl`, `colima`, `ssh` (colima/lima
+  `com.docker.backend`, `vpnkit`, `wslrelay`, `rootlessport` (rootless Docker), `limactl`, `colima`, `ssh` (colima/lima
   forwarders), or any name starting with `orbstack` (`OrbStack Helper`); **or**
 - (b) hidden: no PID, or no process info for the PID. On Linux, docker-proxy runs as root, so
   without sudo it is hidden.
