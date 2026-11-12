@@ -32,14 +32,19 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
       # The integration tests run `python -m http.server --bind 0.0.0.0`.
       # http.server calls socket.getfqdn() between bind() and listen(); for
-      # 0.0.0.0 that resolves the machine's hostname, which can stall for
-      # minutes on macOS runners, so the socket isn't listening yet. Resolve
-      # the hostname locally.
+      # 0.0.0.0 that resolves the machine's hostname. The runner's hostname
+      # is a .local name, which macOS resolves via mDNS (not /etc/hosts), and
+      # that lookup stalls for minutes, so the socket never reaches LISTEN in
+      # time. Use a plain hostname that /etc/hosts maps to 127.0.0.1.
       - name: Resolve hostname locally (macOS)
         if: runner.os == 'macOS'
         run: |
-          echo "127.0.0.1 $(hostname)" | sudo tee -a /etc/hosts
+          echo "hostname before: $(hostname)"
+          sudo scutil --set HostName whatsup-ci
+          sudo hostname whatsup-ci
+          echo "127.0.0.1 whatsup-ci" | sudo tee -a /etc/hosts
           sudo dscacheutil -flushcache
+          time python3 -c "import socket; print(socket.getfqdn('0.0.0.0'))"
       - name: Test
         run: cargo test --locked
 
