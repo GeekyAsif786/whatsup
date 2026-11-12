@@ -33,34 +33,17 @@ jobs:
       # The integration tests run `python -m http.server --bind 0.0.0.0`.
       # http.server calls socket.getfqdn() between bind() and listen(); for
       # 0.0.0.0 that resolves the machine's hostname. The runner's hostname
-      # is a .local name, which macOS resolves via mDNS (not /etc/hosts), and
-      # that lookup stalls for minutes, so the socket never reaches LISTEN in
-      # time. Use a plain hostname that /etc/hosts maps to 127.0.0.1.
+      # is a .local name, resolved via mDNS (not /etc/hosts), which stalls
+      # for minutes, so the socket never reaches LISTEN in time. Use a plain
+      # hostname that /etc/hosts maps to 127.0.0.1. (Reverse lookups of
+      # 127.0.0.1 still take ~35 s here; the tests allow 60 s.)
       - name: Resolve hostname locally (macOS)
         if: runner.os == 'macOS'
         run: |
-          echo "hostname before: $(hostname)"
           sudo scutil --set HostName whatsup-ci
           sudo hostname whatsup-ci
           echo "127.0.0.1 whatsup-ci" | sudo tee -a /etc/hosts
           sudo dscacheutil -flushcache
-          python3 - <<'PY'
-          import socket, time
-          for host in ("0.0.0.0", "127.0.0.1", "0.0.0.0"):
-              t = time.time()
-              print(host, "->", socket.getfqdn(host), "%.2fs" % (time.time() - t))
-          print("gethostname:", socket.gethostname())
-          PY
-      - name: TEMP diagnose slow http.server start (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          cd "$RUNNER_TEMP"
-          PYTHONFAULTHANDLER=1 python3 -m http.server 18123 --bind 127.0.0.1 2> hs.err &
-          sleep 8
-          lsof -nP -a -iTCP -p $! || true
-          kill -ABRT $! || true
-          sleep 1
-          cat hs.err
       - name: Test
         run: cargo test --locked
 

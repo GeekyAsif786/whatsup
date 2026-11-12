@@ -5,7 +5,7 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -30,23 +30,25 @@ impl Drop for Server {
     }
 }
 
-/// Held from "pick a free port" until the server listens on it (and for the
-/// whole free-port test). Tests run in parallel and macOS hands out
-/// ephemeral ports sequentially, so without this a slow-starting server's
-/// port can be picked as "free" by another test before it is bound.
-static PORT_LOCK: Mutex<()> = Mutex::new(());
+/// Ports already handed to a test in this run. Tests run in parallel, and
+/// macOS hands out ephemeral ports sequentially: without this, a port picked
+/// for a slow-starting server (python can take ~35 s to listen on macOS
+/// runners) could be picked again as "free" by another test before it is
+/// bound.
+static RESERVED: Mutex<Vec<u16>> = Mutex::new(Vec::new());
 
-fn port_lock() -> MutexGuard<'static, ()> {
-    // A test that panicked while holding the lock doesn't make ports unsafe.
-    PORT_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-/// A port that was free a moment ago: bind to port 0, read it, release it.
+/// A port that was free a moment ago and that no other test in this run
+/// will get: bind to port 0, read it, release it.
 fn free_port(bind: &str) -> std::io::Result<u16> {
-    let l = TcpListener::bind((bind, 0))?;
-    l.local_addr().map(|a| a.port())
+    loop {
+        let port = TcpListener::bind((bind, 0))?.local_addr()?.port();
+        // A test that panicked while holding the lock leaves the list intact.
+        let mut reserved = RESERVED.lock().unwrap_or_else(|p| p.into_inner());
+        if !reserved.contains(&port) {
+            reserved.push(port);
+            return Ok(port);
+        }
+    }
 }
 
 fn python() -> &'static str {
@@ -66,7 +68,6 @@ fn is_listening(port: u16) -> Result<bool, Box<dyn std::error::Error>> {
 /// is listening. On timeout, the error says whether Python exited, what it
 /// printed, and which ports the socket table did show.
 fn http_server(bind: &str) -> Result<Server, Box<dyn std::error::Error>> {
-    let _ports = port_lock();
     let port = free_port(bind)?;
     let child = Command::new(python())
         .args(["-m", "http.server", &port.to_string(), "--bind", bind])
@@ -235,7 +236,6 @@ fn piped_output_has_no_ansi_even_without_no_color() -> TestResult {
 
 #[test]
 fn free_port_exits_1_and_kill_on_free_port_exits_0() -> TestResult {
-    let _ports = port_lock();
     let p = free_port("127.0.0.1")?.to_string();
     let out = whatsup(&["port", &p])?;
     assert_eq!(out.status.code(), Some(1), "{}", text(&out));
