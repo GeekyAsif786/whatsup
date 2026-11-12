@@ -53,9 +53,17 @@ pub trait ProcessSource {
     fn processes(&mut self, pids: &[u32]) -> anyhow::Result<HashMap<u32, ProcInfo>>;
 }
 
+/// A running container that publishes a host port, and the host addresses
+/// it is published on (used for exposure when no listener row exists).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishedContainer {
+    pub container: Container,
+    pub addrs: Vec<IpAddr>,
+}
+
 /// Maps published host ports to the running container behind them.
 pub trait ContainerSource {
-    fn containers(&mut self) -> anyhow::Result<HashMap<u16, Container>>;
+    fn containers(&mut self) -> anyhow::Result<HashMap<u16, PublishedContainer>>;
 }
 
 /// In-memory implementations for tests: no OS access, fully deterministic.
@@ -102,12 +110,12 @@ pub mod fake {
     /// set (to exercise the "docker missing" path).
     #[derive(Debug, Default)]
     pub struct FakeContainers {
-        pub by_port: HashMap<u16, Container>,
+        pub by_port: HashMap<u16, PublishedContainer>,
         pub fail: bool,
     }
 
     impl ContainerSource for FakeContainers {
-        fn containers(&mut self) -> anyhow::Result<HashMap<u16, Container>> {
+        fn containers(&mut self) -> anyhow::Result<HashMap<u16, PublishedContainer>> {
             if self.fail {
                 anyhow::bail!("docker is not available");
             }
@@ -163,10 +171,13 @@ mod tests {
 
     #[test]
     fn fake_containers_can_fail() -> anyhow::Result<()> {
-        let db = Container {
-            id: "3f2a9c1d7e4b".to_string(),
-            name: "db".to_string(),
-            image: "postgres:16".to_string(),
+        let db = PublishedContainer {
+            container: Container {
+                id: "3f2a9c1d7e4b".to_string(),
+                name: "db".to_string(),
+                image: "postgres:16".to_string(),
+            },
+            addrs: vec![IpAddr::V4(Ipv4Addr::UNSPECIFIED)],
         };
         let mut ok = FakeContainers {
             by_port: HashMap::from([(5432, db.clone())]),
