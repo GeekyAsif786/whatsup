@@ -16,8 +16,12 @@ name = "whatsup"
 path = "src/lib.rs"
 
 [dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
 
 [profile.release]
 lto = true
 strip = true
 codegen-units = 1
+
+[dev-dependencies]
+serde_json = "1.0.154"
