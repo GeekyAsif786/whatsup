@@ -116,11 +116,18 @@ fn matching_rule(name: &str, cmd: &str) -> Option<usize> {
     let name = normalize_name(name);
     let tokens = tokenize(cmd);
     RULES.iter().position(|rule| match rule.pattern {
-        Match::ArgvTokens(needle) => argv_matches(&tokens, needle),
+        Match::ArgvTokens(needle) => {
+            argv_matches(&tokens, needle)
+                || (PACKAGE_GROUPS.contains(&rule.group) && package_matches(&tokens, needle))
+        }
         Match::NameEquals(want) => name == want,
         Match::NameStartsWith(prefix) => name.starts_with(prefix),
     })
 }
+
+/// Rule groups whose argv needles also match an npm package path
+/// (`node_modules/<pkg>/`): 1 = frontend frameworks, 3 = tools.
+const PACKAGE_GROUPS: &[u8] = &[1, 3];
 
 /// Extensions removed from a token's basename before comparing (one at most).
 const STRIPPED_EXTENSIONS: &[&str] = &["js", "cjs", "mjs", "ts", "py", "exe", "cmd", "bat", "ps1"];
@@ -132,6 +139,9 @@ struct Token {
     base: String,
     /// `base` with one extension from [`STRIPPED_EXTENSIONS`] removed.
     stem: String,
+    /// Lowercased npm packages this token's path runs through: the segment
+    /// after each `node_modules/` (`@scope/pkg` for scoped packages).
+    packages: Vec<String>,
 }
 
 /// Splits a command line into tokens (DESIGN.md section 8, "argv tokens").
@@ -144,9 +154,52 @@ fn tokenize(cmd: &str) -> Vec<Token> {
                 Some((stem, ext)) if STRIPPED_EXTENSIONS.contains(&ext) => stem.to_string(),
                 _ => base.clone(),
             };
-            Token { base, stem }
+            Token {
+                base,
+                stem,
+                packages: node_modules_packages(raw),
+            }
         })
         .collect()
+}
+
+/// Packages named by `node_modules/<pkg>/` segments in a path (either
+/// separator). The package must be followed by another separator, so a bare
+/// `node_modules/vite` (no trailing segment) is not a package path.
+/// Scoped packages (`node_modules/@scope/pkg/`) come back as `@scope/pkg`.
+fn node_modules_packages(raw: &str) -> Vec<String> {
+    let lower = raw.to_lowercase();
+    let segs: Vec<&str> = lower.split(['/', '\\']).collect();
+    let mut out = Vec::new();
+    for (i, seg) in segs.iter().enumerate() {
+        if *seg != "node_modules" {
+            continue;
+        }
+        match segs.get(i + 1) {
+            Some(scope) if scope.starts_with('@') => {
+                if let (Some(name), Some(_)) = (segs.get(i + 2), segs.get(i + 3))
+                    && !name.is_empty()
+                {
+                    out.push(format!("{scope}/{name}"));
+                }
+            }
+            Some(pkg) if !pkg.is_empty() && segs.get(i + 2).is_some() => {
+                out.push((*pkg).to_string());
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// True when some token's path runs through `node_modules/<pkg>/` and
+/// `<pkg>` equals the needle's package name: its first word (`next dev` is
+/// the `next` package). Scoped needles (`@scope/pkg`) must match exactly.
+fn package_matches(tokens: &[Token], needle: &str) -> bool {
+    let Some(pkg) = needle.split_whitespace().next() else {
+        return false;
+    };
+    tokens.iter().any(|t| t.packages.iter().any(|p| p == pkg))
 }
 
 /// True when the needle's words match that many consecutive tokens.
@@ -429,6 +482,20 @@ mod tests {
         // Dotted needles compare the whole basename, extension included.
         manage_py_needs_py: ("python3", "python3 manage runserver") => Kind::Python;
         http_server_needs_exact_token: ("python3", "python3 -m http.server2") => Kind::Python;
+        // node_modules package rule: node_modules/<pkg>/ names a frontend/tool rule.
+        pkg_react_scripts_start: ("node", "node /app/node_modules/react-scripts/scripts/start.js") => Kind::ReactScripts;
+        pkg_vite_windows: ("node.exe", "node C:\\app\\node_modules\\vite\\bin\\vite.js") => Kind::Vite;
+        pkg_next_start_server: ("node", "node /app/node_modules/next/dist/server/lib/start-server.js") => Kind::NextJs;
+        pkg_case_insensitive: ("node", "node C:\\App\\Node_Modules\\Astro\\dist\\cli\\index.js") => Kind::Astro;
+        pkg_nested: ("node", "node /app/node_modules/foo/node_modules/nuxt/bin/x.js") => Kind::Nuxt;
+        pkg_expo_cli: ("node", "node /m/node_modules/expo/bin/cli") => Kind::Expo;
+        pkg_metro_dir: ("node", "node /rn/node_modules/metro/src/cli.js") => Kind::Metro;
+        pkg_unknown_package: ("node", "node /code/invite-app/node_modules/express/index.js") => Kind::Node;
+        pkg_name_in_project_dir: ("node", "node /code/my-vite-notes/server.js") => Kind::Node;
+        pkg_needs_exact_package: ("node", "node /app/node_modules/vite-plugin-foo/index.js") => Kind::Node;
+        pkg_scoped_never_matches_unscoped: ("node", "node /app/node_modules/@vitejs/vite/bin/x.js") => Kind::Node;
+        pkg_backend_group_excluded: ("node", "node /app/node_modules/flask/x.js") => Kind::Node;
+        java_jar_stays_java: ("java", "java -jar app.jar") => Kind::Java;
     }
 
     #[test]
@@ -444,6 +511,34 @@ mod tests {
     fn unlisted_extensions_are_kept() {
         let t = tokenize("springboard.jar");
         assert_eq!(t[0].stem, "springboard.jar");
+    }
+
+    #[test]
+    fn node_modules_packages_are_extracted() {
+        assert_eq!(
+            node_modules_packages("/a/node_modules/vite/bin/vite.js"),
+            ["vite"]
+        );
+        assert_eq!(
+            node_modules_packages("C:\\a\\NODE_MODULES\\@Scope\\Pkg\\x.js"),
+            ["@scope/pkg"]
+        );
+        assert_eq!(
+            node_modules_packages("/a/node_modules/x/node_modules/y/z"),
+            ["x", "y"]
+        );
+        // Scoped package needs a trailing segment after the name too.
+        assert!(node_modules_packages("/a/node_modules/@scope/pkg").is_empty());
+        assert!(node_modules_packages("/a/node_modules//x").is_empty());
+        assert!(node_modules_packages("node_modules").is_empty());
+    }
+
+    #[test]
+    fn scoped_needle_matches_only_exactly() {
+        let tokens = tokenize("node /a/node_modules/@scope/pkg/bin.js");
+        assert!(package_matches(&tokens, "@scope/pkg"));
+        assert!(!package_matches(&tokens, "pkg"));
+        assert!(!package_matches(&tokens, "@scope"));
     }
 
     #[test]

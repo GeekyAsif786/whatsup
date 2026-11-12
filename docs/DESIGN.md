@@ -215,6 +215,17 @@ runtimes: checking for 'node' first would label every Vite and Next.js server as
   4. A needle word containing `.` (`http.server`, `manage.py`) is compared with the whole
      basename, without stripping its extension.
   5. Process-name rules (equals / starts with) are unchanged.
+- **node_modules package rule (normative).** A frontend (group 1) or tool (group 3) rule also
+  matches when any argv token's path contains the segment `node_modules/<pkg>/` (or
+  `node_modules\<pkg>\`), compared case-insensitively, and `<pkg>` equals the rule's package
+  name: the needle's first word (`next dev` is the `next` package). This catches entry points
+  whose basename says nothing, e.g. `node /app/node_modules/react-scripts/scripts/start.js` →
+  react-scripts, `node /app/node_modules/next/dist/server/lib/start-server.js` → next.js.
+  The package segment must be followed by another separator. Scoped packages
+  (`node_modules/@scope/pkg/`) are compared as `@scope/pkg` and only match a rule whose needle
+  is exactly that. A framework name elsewhere in a path (`/code/my-vite-notes/server.js`) or an
+  unlisted package (`node_modules/express/`) still doesn't match. Plain `java -jar app.jar`
+  stays java by design.
 - Kind labels: every token in the table is its own kind (slash means "listed together", not
   "same kind"), except where the table gives an explicit `→ kind`:
 
