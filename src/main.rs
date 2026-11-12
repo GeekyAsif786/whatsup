@@ -121,8 +121,23 @@ fn list(all: bool, json: bool, style: Style) -> anyhow::Result<u8> {
             "{}",
             output::render_table(&shown, total - shown.len(), style)
         );
+        let is_macos = cfg!(target_os = "macos");
+        if let Some(note) = output::macos_hidden_note(is_macos, is_root(), all) {
+            println!("{}", style.dim(note));
+        }
     }
     Ok(0)
+}
+
+/// Whether whatsup runs with root privileges (effective uid 0).
+#[cfg(unix)]
+fn is_root() -> bool {
+    nix::unistd::geteuid().is_root()
+}
+
+#[cfg(not(unix))]
+fn is_root() -> bool {
+    false
 }
 
 fn on_port(scanner: &mut Scanner, port: u16) -> anyhow::Result<Vec<Entry>> {

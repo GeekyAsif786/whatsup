@@ -455,6 +455,11 @@ cwd ~/code/api
 | Open URL | xdg-open | open | cmd /C start |
 | Known gotchas | Zombies in containers | lsof-style slowness avoided by native API | WSL2 ports appear via wslrelay |
 
+On macOS without root, other users' listeners are not shown at all (libproc only lists the
+sockets of processes we can inspect), rather than shown with a hidden PID. So `list --all` on macOS
+as non-root prints one line under the table: "Some system listeners are hidden on macOS without
+sudo; run `sudo whatsup list --all` to see everything." It doesn't appear in `--json` output.
+
 **Testing reality:** macOS and Windows behaviour can only be verified in CI (section 17) or on real
 machines. Treat a green CI matrix as a requirement for every release, not a nice-to-have.
 

@@ -41,7 +41,7 @@ impl Style {
         self.paint("33", t)
     }
 
-    fn dim(self, t: &str) -> String {
+    pub fn dim(self, t: &str) -> String {
         self.paint("2", t)
     }
 
@@ -171,6 +171,17 @@ pub fn render_table(entries: &[Entry], hidden_by_filter: usize, style: Style) ->
         );
     }
     out
+}
+
+/// Shown under the `--all` table on macOS when not root (section 14):
+/// libproc only shows our own processes' sockets, so other users' listeners
+/// are missing entirely rather than listed with a hidden PID.
+pub const MACOS_HIDDEN_NOTE: &str = "Some system listeners are hidden on macOS without sudo; run `sudo whatsup list --all` to see everything.";
+
+/// The macOS visibility note, when it applies: macOS, not root, `--all`.
+/// The caller supplies the facts (OS, euid) so this stays pure.
+pub fn macos_hidden_note(is_macos: bool, is_root: bool, all: bool) -> Option<&'static str> {
+    (is_macos && !is_root && all).then_some(MACOS_HIDDEN_NOTE)
 }
 
 /// The one-line exposure warning (section 10).
@@ -515,6 +526,27 @@ PORT   PID    KIND         PROCESS  EXPOSED  UPTIME
         let t = render_kill_targets(&[vite(), docker_db()]);
         assert!(t.contains("stop node (pid 41822) on :5173 [vite]"));
         assert!(t.contains("docker stop db (postgres:16) on :5432 [docker]"));
+    }
+
+    #[test]
+    fn macos_note_only_for_macos_non_root_with_all() {
+        assert_eq!(
+            macos_hidden_note(true, false, true),
+            Some(MACOS_HIDDEN_NOTE)
+        );
+        for (is_macos, is_root, all) in [
+            (true, false, false), // dev-only list: no promise of "everything"
+            (true, true, true),   // root sees every socket
+            (false, false, true), // Linux/Windows show hidden PIDs instead
+            (false, true, false),
+        ] {
+            assert_eq!(
+                macos_hidden_note(is_macos, is_root, all),
+                None,
+                "{is_macos} {is_root} {all}"
+            );
+        }
+        assert!(MACOS_HIDDEN_NOTE.contains("sudo whatsup list --all"));
     }
 
     #[test]
