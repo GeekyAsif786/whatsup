@@ -202,6 +202,21 @@ runtimes: checking for 'node' first would label every Vite and Next.js server as
 | 7 | Fallback | — | other |
 
 - Strip `.exe` before matching on Windows.
+- Kind labels: every token in the table is its own kind (slash means "listed together", not
+  "same kind"), except where the table gives an explicit `→ kind`:
+
+  ```text
+  1 vite, next.js (next dev / next-server), webpack, react-scripts, astro, nuxt, expo, metro
+  2 django, fastapi, flask, gunicorn, rails, puma, laravel, spring
+  3 jupyter, streamlit, python http, ollama
+  4 postgres, mysql (mysqld), mariadb (mariadbd), redis (redis-server), mongodb (mongod), nginx, caddy
+  5 docker
+  6 node, bun, deno, python, ruby, php, java, dotnet, go
+  7 other
+  ```
+
+- The `go` runtime rule matches a process named exactly `go` or `air`, or one starting with
+  `go-build`. It does not use a bare `go` prefix, which would match 'Google Chrome'.
 - Each rule has at least one unit test with a realistic argv string. A new framework = one rule +
   one test: the ideal first contribution.
 - v0.2: move rules to an embedded TOML file so contributors don't need to touch Rust.
@@ -281,6 +296,27 @@ again a second later. Design:
 (Windows), with stdout and stderr silenced. Databases get no 'open' (v0.2: hide the hint for
 non-HTTP kinds).
 
+### 11.5 Stop model
+
+```text
+StopMode   = Listener                       (default, v0.1)
+           | Tree                           (v0.2; defined now, unused until then)
+
+StopResult = Stopped                        SIGTERM / terminate / docker stop succeeded
+           | ForceKilled                    SIGKILL after the grace period (--force / Y)
+           | StillRunning                   alive after the grace period, no --force
+           | Respawned { pid, parent }      port busy again 1.5 s later with a new PID;
+                                            parent = Option<{pid, name}>
+           | Failed { reason }
+
+FailReason = PidHidden                      "PID hidden — run with sudo / elevated terminal"
+           | PermissionDenied               other user's process
+           | PidReused                      PID no longer owns the port (section 16)
+           | Other(String)                  e.g. docker stop's stderr
+```
+
+`FailReason` implements `Display` with the short, actionable human message.
+
 ## 12. CLI specification
 
 | Command | Behaviour | Exit code |
@@ -288,10 +324,15 @@ non-HTTP kinds).
 | `whatsup` | TUI if stdout is a TTY, otherwise same as `list` | 0 |
 | `whatsup list [--json] [--all]` | Table or JSON; alias `ls` | 0; 1 on error |
 | `whatsup port <n\|:n>` | Detail view of whatever is on the port | 0 = in use, 1 = free (grep-style, script-friendly) |
-| `whatsup kill <n> [-y] [-f] [--tree]` | Confirm, then stop (section 11) | 0 stopped / nothing there, 1 failed, 3 still running |
+| `whatsup kill <n> [-y] [-f] [--tree]` | Confirm, then stop (section 11) | 0 stopped / force-killed / nothing there, 1 failed, 3 still running or respawned |
 | Global: `--all`, `--no-color` (+ respect `NO_COLOR`), `--version` | | |
 
 Usage errors exit 2 (clap's default). Output never contains ANSI colour when piped.
+
+`kill` exit codes by `StopResult` (section 11.5): `Stopped` / `ForceKilled` → 0, `Failed` → 1,
+`StillRunning` → 3, `Respawned` → 3. A respawn exits 3 because the port is busy again, so
+`whatsup kill 3000 && npm start` must not continue; its message names the parent that restarted
+it. "Nothing listening on the port" is decided before `stop()` runs and exits 0.
 
 ## 13. TUI specification
 
@@ -404,13 +445,13 @@ too many collide, rename now; it's free before launch and expensive after.
 
 | # | Decision | Recommended default | Status |
 |---|---|---|---|
-| D1 | Language | Rust (ratatui + sysinfo + netstat2): small static binary, systems/security résumé signal. Go (bubbletea + gopsutil) is equally valid if you prefer faster iteration. | Open: Raj |
+| D1 | Language | Rust (ratatui + sysinfo + netstat2): small static binary, systems/security résumé signal. Go (bubbletea + gopsutil) is equally valid if you prefer faster iteration. | Decided: Rust (stable, edition 2024) |
 | D2 | Socket source | Native APIs via library; no lsof parsing | Decided |
 | D3 | Docker integration | docker CLI with 5 s cache | Decided |
-| D4 | Kill semantics | v0.1 listener-only + respawn warning; v0.2 tree mode | Open: Raj |
+| D4 | Kill semantics | v0.1 listener-only + respawn warning; v0.2 tree mode | Decided: as recommended (section 11.5) |
 | D5 | Default filter | Dev heuristic (section 9); `--all` to disable | Decided |
-| D6 | Name | 'whatsup' binary; package names per channel after availability check | Open: Raj |
-| D7 | License | MIT or Apache-2.0 (dev tool: maximise adoption, packagers prefer permissive). Apache-2.0 adds a patent grant. | Open: Raj |
+| D6 | Name | 'whatsup' binary; package names per channel after availability check | Decided: package `whatsup-cli`, binary `whatsup` |
+| D7 | License | MIT or Apache-2.0 (dev tool: maximise adoption, packagers prefer permissive). Apache-2.0 adds a patent grant. | Decided: MIT |
 | D8 | UDP | Excluded from v0.1 | Decided |
 
 ---
