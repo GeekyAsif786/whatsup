@@ -186,6 +186,29 @@ Port strings to parse: `0.0.0.0:5432->5432/tcp`, `:::5432->5432/tcp` and ranges
 port: the host listener belongs to docker-proxy / com.docker.backend / wslrelay, so its row is
 replaced with the container.
 
+**Join rules (normative).** A container is joined to a listener row on its published host port
+only when the row's owner is:
+
+- (a) container plumbing, by process name (lowercase, `.exe` stripped): `docker-proxy`,
+  `com.docker.backend`, `vpnkit`, `wslrelay`, `limactl`, `colima`, `ssh` (colima/lima
+  forwarders), or any name starting with `orbstack` (`OrbStack Helper`); **or**
+- (b) hidden: no PID, or no process info for the PID. On Linux, docker-proxy runs as root, so
+  without sudo it is hidden.
+
+If the owner is a *visible* process that is not plumbing (e.g. node, python), the container is
+**not** attached: the real process row is kept (a real conflict or a stale `docker ps`; never
+guess). A joined row keeps the listener's pid, addresses, uptime and memory; `process` becomes
+`name (image)`, `kind` becomes `docker`, and stopping it runs `docker stop`. Several joined rows
+for the same container and port (one docker-proxy per address family) merge into one.
+
+When Docker runs with the userland proxy disabled, a published port has **no** listener. For
+every published port with no listener row at all, the scanner adds a container row with
+`pid: null`, `addrs` from the published host addresses, exposure from those addresses
+(`0.0.0.0` / `::` → network) and kind `docker`.
+
+If docker is missing, not running or fails, the container source is silently empty. Results,
+failures included, are cached for 5 s.
+
 ## 8. Classification
 
 An ordered rule table; **the first match wins**. Order matters because frameworks run on generic

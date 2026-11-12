@@ -111,6 +111,27 @@ pub fn classify(name: &str, cmd: &str) -> Kind {
     matching_rule(name, cmd).map_or(Kind::Other, |i| RULES[i].kind)
 }
 
+/// Process names that forward a container's published port on the host
+/// (DESIGN.md section 7.3). A listener owned by one of these is replaced by
+/// the container that publishes the port. Compared like rule names
+/// (lowercase, `.exe` stripped); `orbstack` is a prefix (`OrbStack Helper`).
+const CONTAINER_PLUMBING: &[&str] = &[
+    "docker-proxy",
+    "com.docker.backend",
+    "vpnkit",
+    "wslrelay",
+    "limactl",
+    "colima",
+    "ssh",
+];
+
+/// True when `name` is a process that forwards ports for a container runtime
+/// (Docker, OrbStack, colima/lima).
+pub fn is_container_plumbing(name: &str) -> bool {
+    let name = normalize_name(name);
+    CONTAINER_PLUMBING.contains(&name.as_str()) || name.starts_with("orbstack")
+}
+
 /// Index into [`RULES`] of the first rule that matches, if any.
 fn matching_rule(name: &str, cmd: &str) -> Option<usize> {
     let name = normalize_name(name);
@@ -511,6 +532,28 @@ mod tests {
     fn unlisted_extensions_are_kept() {
         let t = tokenize("springboard.jar");
         assert_eq!(t[0].stem, "springboard.jar");
+    }
+
+    #[test]
+    fn container_plumbing_names() {
+        for name in [
+            "docker-proxy",
+            "com.docker.backend",
+            "com.docker.backend.exe",
+            "vpnkit",
+            "wslrelay.exe",
+            "OrbStack Helper",
+            "limactl",
+            "colima",
+            "ssh",
+        ] {
+            assert!(is_container_plumbing(name), "{name}");
+        }
+        for name in [
+            "node", "python3", "postgres", "sshd", "docker", "", "dockerd",
+        ] {
+            assert!(!is_container_plumbing(name), "{name}");
+        }
     }
 
     #[test]

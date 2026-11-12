@@ -7,4 +7,5 @@
 pub mod classify;
 pub mod filter;
 pub mod model;
+pub mod scan;
 pub mod sources;
