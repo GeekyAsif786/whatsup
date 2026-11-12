@@ -5,5 +5,6 @@
 //! and integration tests can reach it.
 
 pub mod classify;
+pub mod filter;
 pub mod model;
 pub mod sources;
