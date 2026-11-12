@@ -6,6 +6,7 @@
 //! in [`fake`].
 
 pub mod docker;
+pub mod sockets;
 
 use std::collections::HashMap;
 use std::net::IpAddr;
