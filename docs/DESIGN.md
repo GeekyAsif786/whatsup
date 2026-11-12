@@ -400,7 +400,7 @@ The confirmation prompt (`kill` without `-y`) has three more outcomes, none of w
 | Situation | Message | Exit code |
 |---|---|---|
 | Declined at the prompt (anything but `y`/`yes`, including EOF) | `aborted, nothing stopped` | 1 |
-| Ctrl-C at the prompt | — | 130 (standard for SIGINT) |
+| Ctrl-C at the prompt (also SIGTERM / SIGHUP: one handler, it can't tell them apart) | — | 130 (standard for SIGINT) |
 | stdin is not a terminal and no `-y` (a usage error, not a decision) | `not a terminal: pass -y to confirm` | 2 (same as clap usage errors) |
 
 When several PIDs own the port (e.g. one on `127.0.0.1` and another on `::1`, or `SO_REUSEPORT`
@@ -433,7 +433,7 @@ cwd ~/code/api
 | `/` | Filter by port, process, kind or command; Enter keeps it, Esc clears it |
 | `a` | Toggle dev-only / all |
 | `r` | Manual refresh |
-| `q` / `Esc` / `Ctrl-C` | Quit; the terminal is always restored, including on panic. `Ctrl-C` quits from every mode (in the prompt it also cancels); `q` and `Esc` are text / clear in Filter and cancel in Confirm |
+| `q` / `Esc` / `Ctrl-C` | Quit; the terminal is always restored, including on panic, SIGTERM and SIGHUP (closing the window). `Ctrl-C` quits from every mode (in the prompt it also cancels); `q` and `Esc` are text / clear in Filter and cancel in Confirm |
 
 - State machine: Normal ⇄ Filter, Normal → Confirm → Normal. Auto-refresh pauses while
   confirming, so rows never shift under the prompt.

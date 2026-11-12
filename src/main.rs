@@ -211,7 +211,9 @@ fn kill(port: u16, yes: bool, force: bool, style: Style) -> anyhow::Result<u8> {
 /// Asks `[y/N]` on the terminal. Ctrl-C exits 130; EOF counts as "no".
 fn confirm(n: usize) -> anyhow::Result<bool> {
     // If the handler can't be installed, the default SIGINT behaviour
-    // (terminate) still applies, so ignoring the error is safe.
+    // (terminate) still applies, so ignoring the error is safe. ctrlc's
+    // `termination` feature routes SIGTERM / SIGHUP here too, so they also
+    // exit 130 at the prompt (nothing has been stopped yet).
     let _ = ctrlc::set_handler(|| {
         eprintln!();
         std::process::exit(130);

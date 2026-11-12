@@ -9,7 +9,9 @@
 //!   seconds). Workers report back over a channel.
 //!
 //! The terminal is always restored: [`TerminalGuard`]'s `Drop` covers quit
-//! and errors, and a panic hook restores it before the panic message prints.
+//! and errors, a panic hook restores it before the panic message prints, and
+//! SIGTERM / SIGHUP (closing the terminal window, `kill <pid>`) set a quit
+//! flag that ends the loop normally, so the guard runs then too.
 
 pub mod app;
 #[cfg(test)]
@@ -63,6 +65,7 @@ pub struct Options {
 /// Runs the TUI until the user quits. The terminal is restored on return,
 /// whether the loop ended normally or with an error.
 pub fn run(opts: Options) -> anyhow::Result<()> {
+    install_signal_handler();
     let guard = TerminalGuard::enter()?;
     let mut terminal =
         Terminal::new(CrosstermBackend::new(io::stdout())).context("could not start the TUI")?;
@@ -129,6 +132,29 @@ pub fn chain_panic_hook(restore: fn()) {
         restore();
         previous(info);
     }));
+}
+
+/// Set from the signal-handler thread on SIGTERM, SIGHUP or SIGINT (on
+/// Windows: Ctrl-C, Ctrl-Break, closing the console). In raw mode Ctrl-C
+/// arrives as a key, not SIGINT, so in practice this is "someone asked us
+/// to terminate". The loop checks it every tick and returns normally.
+static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// Routes termination signals to [`QUIT_REQUESTED`] (ctrlc's `termination`
+/// feature adds SIGTERM and SIGHUP to SIGINT). If installing fails, the
+/// default action (terminate) still applies; only the restore is lost, so
+/// the error is ignored rather than refusing to start.
+fn install_signal_handler() {
+    let _ = ctrlc::set_handler(request_quit);
+}
+
+/// What the signal handler does. Public so tests can drive the same path.
+pub fn request_quit() {
+    QUIT_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+fn quit_requested() -> bool {
+    QUIT_REQUESTED.load(Ordering::SeqCst)
 }
 
 /// Results from the worker threads.
@@ -228,6 +254,9 @@ fn event_loop(
         status: None,
     };
     loop {
+        if quit_requested() {
+            return Ok(());
+        }
         let now = Instant::now();
         let confirming = matches!(app.mode, Mode::Confirm(_));
         // Auto-refresh, paused while confirming so rows never shift under
@@ -262,7 +291,9 @@ fn event_loop(
                 }
             }
         }
-        // Resize and other events need nothing: the next draw adapts.
+        // Resize and other events need nothing: the next draw adapts. A
+        // termination signal is seen at the top of the next iteration, at
+        // most one TICK later.
 
         drain(&rx, app, &mut timers)?;
     }
@@ -323,6 +354,16 @@ fn expire_status(app: &mut App, timers: &mut Timers, now: Instant) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_termination_signal_sets_the_quit_flag() {
+        // The flag path the event loop checks every tick; the end-to-end
+        // test (a real SIGTERM to the TUI in a pty) is tests/tui_signals.rs.
+        assert!(!quit_requested());
+        request_quit();
+        assert!(quit_requested());
+        QUIT_REQUESTED.store(false, Ordering::SeqCst);
+    }
 
     #[test]
     fn status_expires_four_seconds_after_it_was_set() {
