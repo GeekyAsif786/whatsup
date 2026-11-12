@@ -51,6 +51,16 @@ jobs:
               print(host, "->", socket.getfqdn(host), "%.2fs" % (time.time() - t))
           print("gethostname:", socket.gethostname())
           PY
+      - name: TEMP diagnose slow http.server start (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cd "$RUNNER_TEMP"
+          PYTHONFAULTHANDLER=1 python3 -m http.server 18123 --bind 127.0.0.1 2> hs.err &
+          sleep 8
+          lsof -nP -a -iTCP -p $! || true
+          kill -ABRT $! || true
+          sleep 1
+          cat hs.err
       - name: Test
         run: cargo test --locked
 
