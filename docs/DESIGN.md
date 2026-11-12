@@ -497,11 +497,17 @@ machines. Treat a green CI matrix as a requirement for every release, not a nice
 
 | Channel | Audience | Notes |
 |---|---|---|
-| GitHub Releases (5 targets) | Everyone | linux x86_64/aarch64, macOS arm64/x86_64, windows x86_64; tar.gz/zip plus SHA-256 |
-| Homebrew tap | macOS / Linux devs | `brew install <you>/tap/whatsup`; formula updated by the release workflow |
-| npm wrapper | JS devs (largest audience) | `npx whatsup-cli`; postinstall downloads the matching binary, verified by checksum |
-| crates.io | Rust devs | Crate name 'whatsup' is taken; use 'whatsup-cli' with binary name 'whatsup' |
+| GitHub Releases (5 targets) | Everyone | linux x86_64/aarch64 (glibc ≥ 2.35, built on Ubuntu 22.04), macOS arm64/x86_64, windows x86_64 (static CRT); tar.gz/zip, `SHA256SUMS`, a GitHub build attestation per archive |
+| Homebrew tap | macOS / Linux devs | `brew install GeekyAsif786/tap/whatsup` (macOS arm64/x86_64, Linux x86_64); formula generated from `SHA256SUMS` by `packaging/homebrew/fill-formula.sh` and pushed to the tap by hand for v0.1.0 (automation later) |
+| npm wrapper | JS devs (largest audience) | `npx whatsup-cli`; esbuild-style: a tiny JS launcher with `optionalDependencies` on five `@whatsup-cli/<os>-<cpu>` packages, each holding one binary and selected by npm via `os`/`cpu`/`libc`. No postinstall, no download at install time (works offline, behind proxies and with `--ignore-scripts`). Published with provenance via npm trusted publishing; the first publish of each package is manual |
+| crates.io | Rust devs | Crate name 'whatsup' is taken; use 'whatsup-cli' with binary name 'whatsup'. `rust-version = 1.95` (sysinfo 0.40's floor) |
 | Scoop / winget | Windows devs | v0.2 |
+
+The release process (dry run, tag, Homebrew, npm, crates.io) is in `RELEASE.md`. M3 replaced
+two details of prompt A4: the npm wrapper has no postinstall download (a postinstall that fetches
+a binary breaks with `--ignore-scripts`, offline installs and strict proxies, and is a common
+supply-chain red flag), and the Homebrew tap is updated by hand for v0.1.0 instead of by a
+workflow step (that step needs a token that can write to another repository; it comes later).
 
 **Naming check before launch:** crates.io 'whatsup' is taken (verified). Check npm, the Homebrew core
 formula list, the GitHub repo/org name and a .dev domain before recording any marketing material. If
@@ -540,6 +546,8 @@ too many collide, rename now; it's free before launch and expensive after.
 | D6 | Name | 'whatsup' binary; package names per channel after availability check | Decided: package `whatsup-cli`, binary `whatsup` |
 | D7 | License | MIT or Apache-2.0 (dev tool: maximise adoption, packagers prefer permissive). Apache-2.0 adds a patent grant. | Decided: MIT |
 | D8 | UDP | Excluded from v0.1 | Decided |
+| D9 | npm packaging | Platform packages as optionalDependencies, no postinstall (section 17.1) | Decided (M3) |
+| D10 | Release builds | Native runners per target (macOS x86_64 cross-built on arm64); Linux on Ubuntu 22.04 for glibc 2.35; static CRT on Windows; no build cache in release jobs | Decided (M3) |
 
 ---
 
