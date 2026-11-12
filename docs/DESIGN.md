@@ -186,6 +186,37 @@ Port strings to parse: `0.0.0.0:5432->5432/tcp`, `:::5432->5432/tcp` and ranges
 port: the host listener belongs to docker-proxy / com.docker.backend / wslrelay, so its row is
 replaced with the container.
 
+**Join rules (normative).** A container is joined to a listener row on its published host port
+only when the row's owner is:
+
+- (a) container plumbing, by process name (lowercase, `.exe` stripped): `docker-proxy`,
+  `com.docker.backend`, `vpnkit`, `wslrelay`, `rootlessport` (rootless Docker), `limactl`, `colima`, `ssh` (colima/lima
+  forwarders), or any name starting with `orbstack` (`OrbStack Helper`); **or**
+- (b) hidden: no PID, or no process info for the PID. On Linux, docker-proxy runs as root, so
+  without sudo it is hidden.
+
+If the owner is a *visible* process that is not plumbing (e.g. node, python), the container is
+**not** attached: the real process row is kept (a real conflict or a stale `docker ps`; never
+guess). A joined row keeps the listener's pid, addresses, uptime and memory; `process` becomes
+`name (image)`, `kind` becomes `docker`, and stopping it runs `docker stop`. Several joined rows
+for the same container and port (one docker-proxy per address family) merge into one.
+
+When Docker runs with the userland proxy disabled, a published port has **no** listener. For
+every published port with no listener row at all, the scanner adds a container row with
+`pid: null`, `addrs` from the published host addresses, exposure from those addresses
+(`0.0.0.0` / `::` → network) and kind `docker`.
+
+If docker is missing, not running or fails, the container source is silently empty. Results,
+failures included, are cached for 5 s.
+
+**Timeouts (normative).** whatsup never hangs on an external command: every one runs with a
+deadline (stdin closed, stdout/stderr drained on their own threads, and on timeout the child is
+killed and reaped). `docker ps` gets **2 s** (Docker Desktop on macOS often hangs instead of
+failing). On timeout, containers are treated as absent, and `list` / `port` print one line to
+stderr: `Docker didn't respond within 2 s; containers not shown`. The timeout result is cached
+for the same 5 s window, so a hung Docker costs at most one 2 s wait per 5 s. `docker stop`
+timeouts are in section 11.1.
+
 ## 8. Classification
 
 An ordered rule table; **the first match wins**. Order matters because frameworks run on generic
@@ -215,6 +246,17 @@ runtimes: checking for 'node' first would label every Vite and Next.js server as
   4. A needle word containing `.` (`http.server`, `manage.py`) is compared with the whole
      basename, without stripping its extension.
   5. Process-name rules (equals / starts with) are unchanged.
+- **node_modules package rule (normative).** A frontend (group 1) or tool (group 3) rule also
+  matches when any argv token's path contains the segment `node_modules/<pkg>/` (or
+  `node_modules\<pkg>\`), compared case-insensitively, and `<pkg>` equals the rule's package
+  name: the needle's first word (`next dev` is the `next` package). This catches entry points
+  whose basename says nothing, e.g. `node /app/node_modules/react-scripts/scripts/start.js` →
+  react-scripts, `node /app/node_modules/next/dist/server/lib/start-server.js` → next.js.
+  The package segment must be followed by another separator. Scoped packages
+  (`node_modules/@scope/pkg/`) are compared as `@scope/pkg` and only match a rule whose needle
+  is exactly that. A framework name elsewhere in a path (`/code/my-vite-notes/server.js`) or an
+  unlisted package (`node_modules/express/`) still doesn't match. Plain `java -jar app.jar`
+  stays java by design.
 - Kind labels: every token in the table is its own kind (slash means "listed together", not
   "same kind"), except where the table gives an explicit `→ kind`:
 
@@ -274,7 +316,9 @@ on port 6xxx will show up. That's acceptable, and fixable with a rule.
 
 ```text
 stop(entry, mode):
-  if entry.container:            run `docker stop <id>`; report its stderr on failure
+  if entry.container:            run `docker stop <id>`; report its stderr on failure;
+                                 give up after 15 s (above Docker's own 10 s stop grace):
+                                 Failed(Other("docker stop timed out after 15 s"))
   if entry.pid is None:          fail: "PID hidden — run with sudo / elevated terminal"
   targets = [pid]                (mode = Listener, default)
           | process group / dev-command ancestors   (mode = Tree, v0.2)
@@ -321,6 +365,7 @@ StopResult = Stopped                        SIGTERM / terminate / docker stop su
            | ForceKilled                    SIGKILL after the grace period (--force / Y)
            | StillRunning                   alive after the grace period, no --force
            | Respawned { pid, parent }      port busy again 1.5 s later with a new PID;
+                                            pid = Option<u32> (None: new owner hidden),
                                             parent = Option<{pid, name}>
            | Failed { reason }
 
@@ -348,6 +393,21 @@ Usage errors exit 2 (clap's default). Output never contains ANSI colour when pip
 `StillRunning` → 3, `Respawned` → 3. A respawn exits 3 because the port is busy again, so
 `whatsup kill 3000 && npm start` must not continue; its message names the parent that restarted
 it. "Nothing listening on the port" is decided before `stop()` runs and exits 0.
+
+The confirmation prompt (`kill` without `-y`) has three more outcomes, none of which stop anything:
+
+| Situation | Message | Exit code |
+|---|---|---|
+| Declined at the prompt (anything but `y`/`yes`, including EOF) | `aborted, nothing stopped` | 1 |
+| Ctrl-C at the prompt | — | 130 (standard for SIGINT) |
+| stdin is not a terminal and no `-y` (a usage error, not a decision) | `not a terminal: pass -y to confirm` | 2 (same as clap usage errors) |
+
+When several PIDs own the port (e.g. one on `127.0.0.1` and another on `::1`, or `SO_REUSEPORT`
+workers), one prompt lists them all and each is stopped in turn, one result line per owner. The
+exit code is the worst: 1 if any `Failed`, else 3 if any `StillRunning` / `Respawned`, else 0.
+The respawn check runs once, after all owners, and ignores every original PID. An owner that
+exits while an earlier one is being stopped (a worker going down with its master) counts as
+`Stopped`.
 
 ## 13. TUI specification
 
@@ -394,6 +454,11 @@ cwd ~/code/api
 | Docker port owner | docker-proxy | com.docker.backend / vpnkit | com.docker.backend / wslrelay |
 | Open URL | xdg-open | open | cmd /C start |
 | Known gotchas | Zombies in containers | lsof-style slowness avoided by native API | WSL2 ports appear via wslrelay |
+
+On macOS without root, other users' listeners are not shown at all (libproc only lists the
+sockets of processes we can inspect), rather than shown with a hidden PID. So `list --all` on macOS
+as non-root prints one line under the table: "Some system listeners are hidden on macOS without
+sudo; run `sudo whatsup list --all` to see everything." It doesn't appear in `--json` output.
 
 **Testing reality:** macOS and Windows behaviour can only be verified in CI (section 17) or on real
 machines. Treat a green CI matrix as a requirement for every release, not a nice-to-have.

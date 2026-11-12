@@ -214,8 +214,12 @@ pub enum StopResult {
     ForceKilled,
     /// The process is still alive after the grace period; suggest `--force`.
     StillRunning,
-    /// The port was busy again shortly after stopping, with a new PID.
-    Respawned { pid: u32, parent: Option<ProcRef> },
+    /// The port was busy again shortly after stopping, with a new PID
+    /// (`None` when the new owner's PID is hidden).
+    Respawned {
+        pid: Option<u32>,
+        parent: Option<ProcRef>,
+    },
     /// The stop could not be attempted or failed.
     Failed { reason: FailReason },
 }
@@ -382,7 +386,7 @@ mod tests {
     #[test]
     fn stop_result_exit_codes_match_spec_section_12() {
         let respawned = StopResult::Respawned {
-            pid: 4242,
+            pid: Some(4242),
             parent: Some(ProcRef {
                 pid: 4000,
                 name: "nodemon".to_string(),
@@ -415,12 +419,20 @@ mod tests {
             r#"{"result":"failed","reason":{"code":"other","detail":"no such container"}}"#
         );
         let respawned = StopResult::Respawned {
-            pid: 7,
+            pid: Some(7),
             parent: None,
         };
         assert_eq!(
             serde_json::to_string(&respawned)?,
             r#"{"result":"respawned","pid":7,"parent":null}"#
+        );
+        let hidden = StopResult::Respawned {
+            pid: None,
+            parent: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&hidden)?,
+            r#"{"result":"respawned","pid":null,"parent":null}"#
         );
         assert_eq!(serde_json::to_string(&StopMode::Tree)?, r#""tree""#);
         Ok(())

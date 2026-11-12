@@ -4,7 +4,11 @@
 //! The binary lives in `main.rs`; everything else is a library so that unit
 //! and integration tests can reach it.
 
+pub mod actions;
 pub mod classify;
 pub mod filter;
 pub mod model;
+pub mod output;
+pub mod run;
+pub mod scan;
 pub mod sources;

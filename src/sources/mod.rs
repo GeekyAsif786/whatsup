@@ -2,10 +2,12 @@
 //!
 //! Steps 1–3 of the pipeline (enumerate, attribute, enrich) are
 //! platform-specific, so they sit behind these traits. Real implementations
-//! (netstat2, sysinfo, docker CLI) arrive in M1; tests use the in-memory fakes
+//! (netstat2, sysinfo, docker CLI) live in the submodules; tests use the fakes
 //! in [`fake`].
 
 pub mod docker;
+pub mod processes;
+pub mod sockets;
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -34,6 +36,8 @@ pub struct ProcInfo {
     pub user_id: Option<String>,
     pub uptime_secs: Option<u64>,
     pub memory_mb: Option<u64>,
+    /// Parent PID, when the OS reports one.
+    pub parent: Option<u32>,
 }
 
 /// Enumerates TCP sockets in LISTEN state (step 1 and 2).
@@ -44,13 +48,22 @@ pub trait SocketSource {
 /// Looks up process details by PID (step 3).
 pub trait ProcessSource {
     /// Returns info for each requested PID that still exists. PIDs that have
-    /// exited are left out rather than reported as errors.
+    /// exited (including zombies waiting to be reaped) are left out rather
+    /// than reported as errors.
     fn processes(&mut self, pids: &[u32]) -> anyhow::Result<HashMap<u32, ProcInfo>>;
+}
+
+/// A running container that publishes a host port, and the host addresses
+/// it is published on (used for exposure when no listener row exists).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishedContainer {
+    pub container: Container,
+    pub addrs: Vec<IpAddr>,
 }
 
 /// Maps published host ports to the running container behind them.
 pub trait ContainerSource {
-    fn containers(&mut self) -> anyhow::Result<HashMap<u16, Container>>;
+    fn containers(&mut self) -> anyhow::Result<HashMap<u16, PublishedContainer>>;
 }
 
 /// In-memory implementations for tests: no OS access, fully deterministic.
@@ -97,14 +110,19 @@ pub mod fake {
     /// set (to exercise the "docker missing" path).
     #[derive(Debug, Default)]
     pub struct FakeContainers {
-        pub by_port: HashMap<u16, Container>,
+        pub by_port: HashMap<u16, PublishedContainer>,
         pub fail: bool,
+        /// Return the docker timeout error instead.
+        pub timed_out: bool,
     }
 
     impl ContainerSource for FakeContainers {
-        fn containers(&mut self) -> anyhow::Result<HashMap<u16, Container>> {
+        fn containers(&mut self) -> anyhow::Result<HashMap<u16, PublishedContainer>> {
             if self.fail {
                 anyhow::bail!("docker is not available");
+            }
+            if self.timed_out {
+                return Err(super::docker::DockerTimeout.into());
             }
             Ok(self.by_port.clone())
         }
@@ -158,14 +176,17 @@ mod tests {
 
     #[test]
     fn fake_containers_can_fail() -> anyhow::Result<()> {
-        let db = Container {
-            id: "3f2a9c1d7e4b".to_string(),
-            name: "db".to_string(),
-            image: "postgres:16".to_string(),
+        let db = PublishedContainer {
+            container: Container {
+                id: "3f2a9c1d7e4b".to_string(),
+                name: "db".to_string(),
+                image: "postgres:16".to_string(),
+            },
+            addrs: vec![IpAddr::V4(Ipv4Addr::UNSPECIFIED)],
         };
         let mut ok = FakeContainers {
             by_port: HashMap::from([(5432, db.clone())]),
-            fail: false,
+            ..FakeContainers::default()
         };
         assert_eq!(ok.containers()?.get(&5432), Some(&db));
 
