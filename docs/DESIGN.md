@@ -261,6 +261,8 @@ on port 6xxx will show up. That's acceptable, and fixable with a rule.
 
 - **local** if every bound address is loopback (`127.0.0.0/8`, `::1`); **network** otherwise, including
   `0.0.0.0`, `::`, and specific LAN IPs.
+- An empty address list is **network** (fail safe): without evidence that a listener is
+  loopback-only, flag it.
 - This is the product's security angle, so make it visible: a header count, yellow rows, and a
   one-line warning in list output.
 - Caveat to document: 'network' means *reachable if the firewall allows it*. whatsup does not

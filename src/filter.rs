@@ -50,9 +50,10 @@ fn is_system_path(exe: &str) -> bool {
 /// (127.0.0.0/8, ::1), `Network` otherwise (including 0.0.0.0, :: and LAN IPs).
 ///
 /// IPv4-mapped IPv6 addresses (`::ffff:127.0.0.1`) are judged by their IPv4
-/// form. An empty list is vacuously `Local`; the scanner never produces one.
+/// form. An empty list is `Network`: with no evidence that the listener is
+/// loopback-only, fail safe and flag it.
 pub fn exposure(addrs: &[IpAddr]) -> Exposure {
-    if addrs.iter().all(|a| a.to_canonical().is_loopback()) {
+    if !addrs.is_empty() && addrs.iter().all(|a| a.to_canonical().is_loopback()) {
         Exposure::Local
     } else {
         Exposure::Network
@@ -306,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_address_list_is_local() {
-        assert_eq!(exposure(&[]), Exposure::Local);
+    fn empty_address_list_is_network() {
+        assert_eq!(exposure(&[]), Exposure::Network);
     }
 }
