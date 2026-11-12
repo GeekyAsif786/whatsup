@@ -6,7 +6,7 @@
 
 use std::net::IpAddr;
 
-use crate::model::{Exposure, Kind};
+use crate::model::{Entry, Exposure, Kind};
 
 /// Executable locations that mark a process as part of the OS (section 9).
 const SYSTEM_PATHS: &[&str] = &[
@@ -58,6 +58,20 @@ pub fn exposure(addrs: &[IpAddr]) -> Exposure {
     } else {
         Exposure::Network
     }
+}
+
+/// The TUI's `/` filter (DESIGN.md section 13): a case-insensitive substring
+/// of the port (`:5173` or `5173`), process, kind or command. Surrounding
+/// whitespace is ignored; an empty query matches everything.
+pub fn matches_query(entry: &Entry, query: &str) -> bool {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return true;
+    }
+    format!(":{}", entry.port).contains(&q)
+        || entry.process.to_lowercase().contains(&q)
+        || entry.kind.as_str().contains(&q)
+        || entry.command.to_lowercase().contains(&q)
 }
 
 #[cfg(test)]
@@ -309,5 +323,40 @@ mod tests {
     #[test]
     fn empty_address_list_is_network() {
         assert_eq!(exposure(&[]), Exposure::Network);
+    }
+
+    #[test]
+    fn query_matches_port_process_kind_and_command() {
+        let e = Entry {
+            port: 5173,
+            pid: Some(41822),
+            process: "node".to_string(),
+            kind: Kind::Vite,
+            exposure: Exposure::Local,
+            addrs: vec!["127.0.0.1".to_string()],
+            command: "node /home/me/Web/node_modules/.bin/vite".to_string(),
+            cwd: Some("/home/me/web".to_string()),
+            uptime_secs: None,
+            memory_mb: None,
+            dev: true,
+            container: None,
+        };
+        for q in [
+            "",
+            "  ",
+            "5173",
+            ":5173",
+            ":51",
+            "73",
+            "NODE",
+            "vit",
+            "/home/me/web",
+            " vite ",
+        ] {
+            assert!(matches_query(&e, q), "{q:?}");
+        }
+        for q in ["5174", "::5173", "python", "django", "127.0.0.1"] {
+            assert!(!matches_query(&e, q), "{q:?}");
+        }
     }
 }
