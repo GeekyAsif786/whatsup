@@ -1,7 +1,8 @@
 name: Release
 
 # A pushed tag v* builds the five targets (DESIGN.md section 17.1), writes
-# SHA256SUMS, attests every archive and creates the GitHub Release.
+# SHA256SUMS, attests every archive and creates a DRAFT GitHub Release. The
+# maintainer reviews it and clicks "Publish release" (RELEASE.md section 2).
 #
 # Anything else is a dry run that builds and packages everything but
 # publishes nothing (no release, no attestation): run it from the Actions
@@ -235,13 +236,15 @@ jobs:
           subject-path: |
             dist/whatsup-v*.tar.gz
             dist/whatsup-v*.zip
-      - name: Create the GitHub Release
+      # A draft: nothing is public until the maintainer has checked the
+      # assets, SHA256SUMS and attestations and clicks "Publish release".
+      - name: Create the draft GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           prerelease=()
           [[ "$TAG" == *-* ]] && prerelease=(--prerelease)
-          gh release create "$TAG" --verify-tag --generate-notes --title "whatsup $TAG" \
+          gh release create "$TAG" --draft --verify-tag --generate-notes --title "whatsup $TAG" \
             "${prerelease[@]}" \
             dist/whatsup-v*.tar.gz dist/whatsup-v*.zip dist/SHA256SUMS

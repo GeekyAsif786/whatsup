@@ -1,14 +1,14 @@
 # Releasing whatsup
 
-The maintainer's checklist. Pushing a `v*` tag builds and publishes the GitHub Release
-automatically; Homebrew, npm and crates.io are separate steps after it. For v0.1.0, every
-step after the tag is done by hand.
+The maintainer's checklist. Pushing a `v*` tag builds everything and creates a **draft** GitHub
+Release; nothing is public until you review it and click **Publish release**. Homebrew, npm and
+crates.io are separate steps after that. For v0.1.0, every step after the tag is done by hand.
 
 What ships where:
 
 | Channel | Made by | Published by |
 |---|---|---|
-| GitHub Release: 5 archives, `SHA256SUMS`, build attestations | `.github/workflows/release.yml` on the tag | the same workflow |
+| GitHub Release: 5 archives, `SHA256SUMS`, build attestations | `.github/workflows/release.yml` on the tag (as a draft) | you: review the draft, then **Publish release** |
 | Homebrew: `GeekyAsif786/homebrew-tap`, `Formula/whatsup.rb` | `packaging/homebrew/fill-formula.sh` | you, by hand (automation later) |
 | npm: `whatsup-cli` + 5 `@whatsup-cli/*` packages | `scripts/npm-assemble.mjs` | first time: you, by hand; later: `.github/workflows/npm-publish.yml` |
 | crates.io: `whatsup-cli` | `cargo publish` | you, by hand |
@@ -37,7 +37,7 @@ What ships where:
       npm packages, but publishes nothing. Check the run summary (sizes, checksums).
 - [ ] `cargo publish --dry-run --locked` passes.
 
-## 2. Tag: creates the GitHub Release
+## 2. Tag: creates a draft GitHub Release; you publish it
 
 ```sh
 git switch main && git pull
@@ -46,21 +46,40 @@ git push origin v0.1.0
 ```
 
 The **Release** workflow checks the tag equals `Cargo.toml`'s version, builds, attests every
-archive (`actions/attest-build-provenance`) and creates the release with generated notes
-(categories from `.github/release.yml`). A tag with a `-` (`v0.2.0-rc.1`) becomes a pre-release.
+archive (`actions/attest-build-provenance`) and creates a **DRAFT** release with generated notes
+(categories from `.github/release.yml`). A tag with a `-` (`v0.2.0-rc.1`) is marked as a
+pre-release. A draft is visible only to people with write access to the repository; its download
+URLs don't work for anyone else yet.
 
-Check the release:
+Review the draft (Releases → the draft, or `gh release view v0.1.0 --web`):
+
+- [ ] Assets: exactly the five archives (`whatsup-v0.1.0-<target>.tar.gz`, `.zip` for Windows)
+      and `SHA256SUMS`, with sizes in line with the workflow run's summary.
+- [ ] Checksums and attestations match what you download (`gh` finds draft releases when you are
+      signed in with write access):
 
 ```sh
 mkdir /tmp/whatsup-check && cd /tmp/whatsup-check
 gh release download v0.1.0 --repo GeekyAsif786/whatsup
 sha256sum --check SHA256SUMS                     # macOS: shasum -a 256 -c SHA256SUMS
 for f in whatsup-v0.1.0-*; do gh attestation verify "$f" --repo GeekyAsif786/whatsup; done
+./whatsup-v0.1.0-aarch64-apple-darwin/whatsup --version   # after tar -xzf, on your platform
 ```
 
 - [ ] Edit the generated notes if needed (highlights at the top).
+- [ ] Click **Publish release** (or `gh release edit v0.1.0 --draft=false`). This is the moment
+      v0.1.0 becomes public.
+
+If something is wrong, delete the draft and the tag (`gh release delete v0.1.0 --cleanup-tag`),
+fix it on `main`, and tag again. Nobody outside the repo has seen the draft.
+
+After publishing:
+
 - [ ] Fresh-machine check (M3 exit criterion): on a clean macOS and a clean Windows machine,
       install from the release and run `whatsup` in under 60 s.
+
+Homebrew, npm and crates.io (below) all need the **published** release: the formula's URLs and
+the npm publish workflow download its assets.
 
 ## 3. Homebrew (manual for v0.1.0)
 
