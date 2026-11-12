@@ -352,8 +352,9 @@ again a second later. Design:
 ### 11.4 Open in browser
 
 `o`/`Enter` opens `http://localhost:<port>` via `open` (macOS), `xdg-open` (Linux), or `cmd /C start`
-(Windows), with stdout and stderr silenced. Databases get no 'open' (v0.2: hide the hint for
-non-HTTP kinds).
+(Windows), with stdin, stdout and stderr detached and no shell (`cmd /C start "" <url>` on Windows). Databases get no 'open': the hint is hidden and the key shows a short note
+instead for database kinds, containers running a database image, and container plumbing with no
+known container (`classify::opens_in_browser`).
 
 ### 11.5 Stop model
 
@@ -426,13 +427,13 @@ cwd ~/code/api
 | Key | Action |
 |---|---|
 | `↑↓` / `jk` | Move selection (wraps) |
-| `x` / `Del` | Confirm prompt: `y` = stop, `Y` = force, any other key = cancel |
+| `x` / `Del` | Confirm prompt: `y` = stop, `Y` = force, any other key = cancel. Stops every owner of the selected port, like `kill <port>` (the prompt lists them) |
 | `X` (v0.2) | Tree stop, with the tree shown in the prompt |
 | `o` / `Enter` | Open in browser |
 | `/` | Filter by port, process, kind or command; Enter keeps it, Esc clears it |
 | `a` | Toggle dev-only / all |
 | `r` | Manual refresh |
-| `q` / `Esc` / `Ctrl-C` | Quit; the terminal is always restored, including on panic |
+| `q` / `Esc` / `Ctrl-C` | Quit; the terminal is always restored, including on panic. `Ctrl-C` quits from every mode (in the prompt it also cancels); `q` and `Esc` are text / clear in Filter and cancel in Confirm |
 
 - State machine: Normal ⇄ Filter, Normal → Confirm → Normal. Auto-refresh pauses while
   confirming, so rows never shift under the prompt.
@@ -441,7 +442,13 @@ cwd ~/code/api
 - Minimum terminal size 60×12; below that, render 'terminal too small' instead of a broken
   layout.
 - Colours by kind group (frontend green, Python yellow, DB magenta, docker cyan, other grey).
-  Never rely on colour alone: the EXPOSED column carries the text too.
+  Never rely on colour alone: the EXPOSED column carries the text too. Nginx and Caddy count as
+  'other' (they serve HTTP; magenta is for databases).
+- Scans run on a worker thread and each stop on its own thread (`actions::stop_port`, the same
+  path as `kill`), so a slow `docker ps` or a 3 s grace period never freezes the keys. A scan
+  that finishes while the prompt is open is dropped and redone when it closes.
+- The detail pane is four labelled lines: `cmd`, `cwd` (`~` for home), `addr` (with the
+  exposure in words) and `container` (`-` when none).
 
 ## 14. Cross-platform matrix
 
@@ -505,7 +512,7 @@ too many collide, rename now; it's free before launch and expensive after.
 | Layer | What | Where |
 |---|---|---|
 | Unit | `classify()` per rule, docker port parser, exposure, dev heuristic table, duration formatting, JSON schema snapshot | `cargo test`, every OS |
-| Integration | Spawn a real listener (`python http.server` 127.0.0.1:port and 0.0.0.0:port) → assert it appears with the right exposure → kill → assert it's gone | CI on ubuntu, macos, windows |
+| Integration | Spawn a real listener (a tiny Rust listener on 127.0.0.1 and 0.0.0.0: the test binary re-run as a helper) → assert it appears with the right exposure → kill → assert it's gone. One test keeps a real `python -m http.server` to prove the 'python http' rule | CI on ubuntu, macos, windows |
 | TUI snapshot | Render fixed fake entries with ratatui TestBackend; compare to stored snapshots (insta) | `cargo test` |
 | State machine | Key sequences → expected mode/selection (no terminal needed) | `cargo test` |
 | Manual pre-release | Real Docker, a reloader (`uvicorn --reload` / `next dev`), a sudo-owned listener | Checklist in RELEASE.md |
