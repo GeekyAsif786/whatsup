@@ -71,7 +71,7 @@ pub fn format_uptime(secs: Option<u64>) -> String {
 }
 
 /// The PROCESS column / detail value: the name, or `(hidden)`.
-fn process_label(e: &Entry) -> String {
+pub fn process_label(e: &Entry) -> String {
     if e.process.is_empty() {
         "(hidden)".to_string()
     } else {
@@ -79,11 +79,11 @@ fn process_label(e: &Entry) -> String {
     }
 }
 
-fn pid_label(e: &Entry) -> String {
+pub fn pid_label(e: &Entry) -> String {
     e.pid.map_or_else(|| "-".to_string(), |p| p.to_string())
 }
 
-fn exposure_label(x: Exposure) -> &'static str {
+pub fn exposure_label(x: Exposure) -> &'static str {
     match x {
         Exposure::Local => "local",
         Exposure::Network => "network",
@@ -244,7 +244,7 @@ pub fn render_detail(entries: &[Entry], style: Style) -> String {
 }
 
 /// "vite (pid 41822) on :5173" / "db (postgres:16) on :5432".
-fn describe(e: &Entry) -> String {
+pub fn describe(e: &Entry) -> String {
     let name = process_label(e);
     match e.pid {
         Some(pid) if e.container.is_none() => format!("{name} (pid {pid}) on :{}", e.port),

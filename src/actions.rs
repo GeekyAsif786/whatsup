@@ -4,7 +4,7 @@
 //! the [`Control`] trait (signals, `docker stop`, sleeping), so PID reuse,
 //! grace periods and respawns are unit-tested with fakes and a fake clock.
 
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
 use crate::model::{Entry, FailReason, ProcRef, StopMode, StopResult};
@@ -318,6 +318,55 @@ impl Control for OsControl {
     fn sleep(&mut self, d: Duration) {
         std::thread::sleep(d);
     }
+}
+
+/// The URL `o` / Enter opens for a port (section 11.4).
+pub fn local_url(port: u16) -> String {
+    format!("http://localhost:{port}")
+}
+
+/// The platform opener for `url` as a program and argument array (section
+/// 11.4). `os` is [`std::env::consts::OS`]; taking it as a parameter keeps
+/// every platform's command testable on any platform.
+///
+/// On Windows `start` is a `cmd` built-in, so it has to go through `cmd /C`.
+/// Its first quoted argument is a window title, hence the empty `""`. The
+/// URL is built from a port number, so it never contains `cmd`
+/// metacharacters.
+pub fn opener(os: &str, url: &str) -> (&'static str, Vec<String>) {
+    match os {
+        "macos" => ("open", vec![url.to_string()]),
+        "windows" => (
+            "cmd",
+            vec![
+                "/C".to_string(),
+                "start".to_string(),
+                String::new(),
+                url.to_string(),
+            ],
+        ),
+        _ => ("xdg-open", vec![url.to_string()]),
+    }
+}
+
+/// Opens `http://localhost:<port>` in the default browser, without a shell,
+/// with stdin, stdout and stderr detached so the opener can't draw over the
+/// TUI or read its keys. Returns once the opener has started; a background
+/// thread waits for it so it never lingers as a zombie.
+pub fn open_in_browser(port: u16) -> Result<(), String> {
+    let url = local_url(port);
+    let (program, args) = opener(std::env::consts::OS, &url);
+    let mut child = Command::new(program)
+        .args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("could not run {program}: {e}"))?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -1032,5 +1081,26 @@ mod tests {
             OsControl.kill(u32::MAX),
             Err(SignalError::Other(_))
         ));
+    }
+
+    #[test]
+    fn opener_is_an_argument_array_per_platform() {
+        let url = local_url(5173);
+        assert_eq!(url, "http://localhost:5173");
+        assert_eq!(opener("macos", &url), ("open", vec![url.clone()]));
+        assert_eq!(opener("linux", &url), ("xdg-open", vec![url.clone()]));
+        assert_eq!(opener("freebsd", &url), ("xdg-open", vec![url.clone()]));
+        assert_eq!(
+            opener("windows", &url),
+            (
+                "cmd",
+                vec![
+                    "/C".to_string(),
+                    "start".to_string(),
+                    String::new(),
+                    url.clone()
+                ]
+            )
+        );
     }
 }
