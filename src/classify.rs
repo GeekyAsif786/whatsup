@@ -1,0 +1,333 @@
+//! Classifier: the ordered rule table from DESIGN.md section 8.
+//!
+//! Pure code: no I/O, no clocks, no process spawning. The first matching rule
+//! wins, so frameworks (which run on generic runtimes) come before runtimes.
+//! Adding a framework = one entry in [`RULES`] + one test case.
+
+use crate::model::Kind;
+
+/// What a rule looks at. All comparisons are case-insensitive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Match {
+    /// The joined argv contains this substring.
+    ArgvContains(&'static str),
+    /// The process name equals this string.
+    NameEquals(&'static str),
+    /// The process name starts with this string.
+    NameStartsWith(&'static str),
+}
+
+/// One row of the classification table. Patterns are lowercase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rule {
+    /// Priority group from the spec table (1 = frontend ... 6 = runtimes).
+    pub group: u8,
+    pub pattern: Match,
+    pub kind: Kind,
+}
+
+const fn argv(group: u8, needle: &'static str, kind: Kind) -> Rule {
+    Rule {
+        group,
+        pattern: Match::ArgvContains(needle),
+        kind,
+    }
+}
+
+const fn name_is(group: u8, name: &'static str, kind: Kind) -> Rule {
+    Rule {
+        group,
+        pattern: Match::NameEquals(name),
+        kind,
+    }
+}
+
+const fn name_starts(group: u8, prefix: &'static str, kind: Kind) -> Rule {
+    Rule {
+        group,
+        pattern: Match::NameStartsWith(prefix),
+        kind,
+    }
+}
+
+/// The rule table, in priority order. Group 7 (fallback) is implicit:
+/// no match means [`Kind::Other`].
+pub const RULES: &[Rule] = &[
+    // 1. Frontend frameworks: argv contains
+    argv(1, "vite", Kind::Vite),
+    argv(1, "next dev", Kind::NextJs),
+    argv(1, "next-server", Kind::NextJs),
+    argv(1, "webpack", Kind::Webpack),
+    argv(1, "react-scripts", Kind::ReactScripts),
+    argv(1, "astro", Kind::Astro),
+    argv(1, "nuxt", Kind::Nuxt),
+    argv(1, "expo", Kind::Expo),
+    argv(1, "metro", Kind::Metro),
+    // 2. Backend frameworks: argv contains
+    argv(2, "manage.py runserver", Kind::Django),
+    argv(2, "uvicorn", Kind::FastApi),
+    argv(2, "flask", Kind::Flask),
+    argv(2, "gunicorn", Kind::Gunicorn),
+    argv(2, "rails", Kind::Rails),
+    argv(2, "puma", Kind::Puma),
+    argv(2, "artisan serve", Kind::Laravel),
+    argv(2, "spring", Kind::Spring),
+    // 3. Tools: argv contains
+    argv(3, "jupyter", Kind::Jupyter),
+    argv(3, "streamlit", Kind::Streamlit),
+    argv(3, "http.server", Kind::PythonHttp),
+    argv(3, "ollama", Kind::Ollama),
+    // 4. Databases / infra: process name equals
+    name_is(4, "postgres", Kind::Postgres),
+    name_is(4, "mysqld", Kind::Mysql),
+    name_is(4, "mariadbd", Kind::Mariadb),
+    name_is(4, "redis-server", Kind::Redis),
+    name_is(4, "mongod", Kind::Mongodb),
+    name_is(4, "nginx", Kind::Nginx),
+    name_is(4, "caddy", Kind::Caddy),
+    // 5. Container plumbing: process name equals
+    name_is(5, "docker-proxy", Kind::Docker),
+    name_is(5, "com.docker.backend", Kind::Docker),
+    name_is(5, "vpnkit", Kind::Docker),
+    name_is(5, "wslrelay", Kind::Docker),
+    // 6. Generic runtimes: process name starts with
+    name_starts(6, "node", Kind::Node),
+    name_starts(6, "bun", Kind::Bun),
+    name_starts(6, "deno", Kind::Deno),
+    name_starts(6, "python", Kind::Python),
+    name_starts(6, "ruby", Kind::Ruby),
+    name_starts(6, "php", Kind::Php),
+    name_starts(6, "java", Kind::Java),
+    name_starts(6, "dotnet", Kind::Dotnet),
+    // go: exact names only, so "Google Chrome" never matches a "go" prefix.
+    name_is(6, "go", Kind::Go),
+    name_is(6, "air", Kind::Go),
+    name_starts(6, "go-build", Kind::Go),
+];
+
+/// Classifies a process by its name and joined argv.
+pub fn classify(name: &str, cmd: &str) -> Kind {
+    matching_rule(name, cmd).map_or(Kind::Other, |i| RULES[i].kind)
+}
+
+/// Index into [`RULES`] of the first rule that matches, if any.
+fn matching_rule(name: &str, cmd: &str) -> Option<usize> {
+    let name = normalize_name(name);
+    let cmd = cmd.to_lowercase();
+    RULES.iter().position(|rule| match rule.pattern {
+        Match::ArgvContains(needle) => cmd.contains(needle),
+        Match::NameEquals(want) => name == want,
+        Match::NameStartsWith(prefix) => name.starts_with(prefix),
+    })
+}
+
+/// Lowercases the name and strips a trailing `.exe` (Windows executables).
+///
+/// The strip is applied on every OS: a `.exe` suffix only occurs in practice
+/// on Windows, and doing it unconditionally keeps this function testable on
+/// all CI runners.
+fn normalize_name(name: &str) -> String {
+    let lower = name.trim().to_lowercase();
+    match lower.strip_suffix(".exe") {
+        Some(stem) => stem.to_string(),
+        None => lower,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Generates one #[test] per case and a CASES table for the coverage test.
+    macro_rules! rule_cases {
+        ($($test:ident: ($name:expr, $cmd:expr) => $kind:expr;)*) => {
+            $(
+                #[test]
+                fn $test() {
+                    assert_eq!(classify($name, $cmd), $kind);
+                }
+            )*
+            const CASES: &[(&str, &str, Kind)] = &[$(($name, $cmd, $kind)),*];
+        };
+    }
+
+    rule_cases! {
+        // 1. Frontend frameworks
+        rule_vite: ("node", "node /home/me/web/node_modules/.bin/vite --port 5173") => Kind::Vite;
+        rule_next_dev: ("node", "node /home/me/shop/node_modules/.bin/next dev") => Kind::NextJs;
+        rule_next_server: ("next-server (v14.2.3)", "next-server (v14.2.3)") => Kind::NextJs;
+        rule_webpack: ("node", "node node_modules/.bin/webpack serve --mode development") => Kind::Webpack;
+        rule_react_scripts: ("node", "node /home/me/app/node_modules/react-scripts/scripts/start.js") => Kind::ReactScripts;
+        rule_astro: ("node", "node /home/me/blog/node_modules/.bin/astro dev") => Kind::Astro;
+        rule_nuxt: ("node", "node /home/me/site/node_modules/nuxt/bin/nuxt.mjs dev") => Kind::Nuxt;
+        rule_expo: ("node", "node /home/me/mobile/node_modules/.bin/expo start") => Kind::Expo;
+        rule_metro: ("node", "node /home/me/rn/node_modules/.bin/metro serve --port 8081") => Kind::Metro;
+        // 2. Backend frameworks
+        rule_django: ("python3", "python3 manage.py runserver 0.0.0.0:8000") => Kind::Django;
+        rule_uvicorn: ("python3", "/home/me/api/.venv/bin/python3 /home/me/api/.venv/bin/uvicorn main:app --reload") => Kind::FastApi;
+        rule_flask: ("python3", "/usr/bin/python3 -m flask --app hello run --debug") => Kind::Flask;
+        rule_gunicorn: ("python3", "/srv/app/.venv/bin/python3 /srv/app/.venv/bin/gunicorn -w 4 app:app") => Kind::Gunicorn;
+        rule_rails: ("ruby", "ruby bin/rails server -p 3000") => Kind::Rails;
+        rule_puma: ("ruby", "puma 6.4.2 (tcp://localhost:9292) [shop]") => Kind::Puma;
+        rule_laravel: ("php", "php artisan serve --port=8000") => Kind::Laravel;
+        rule_spring: ("java", "/usr/bin/java -cp target/classes:target/lib/* org.springframework.boot.loader.launch.JarLauncher") => Kind::Spring;
+        // 3. Tools
+        rule_jupyter: ("python3.12", "/opt/homebrew/bin/python3.12 /opt/homebrew/bin/jupyter-lab --no-browser") => Kind::Jupyter;
+        rule_streamlit: ("python3", "/home/me/dash/.venv/bin/python3 /home/me/dash/.venv/bin/streamlit run app.py") => Kind::Streamlit;
+        rule_http_server: ("python3", "python3 -m http.server 8000 --bind 0.0.0.0") => Kind::PythonHttp;
+        rule_ollama: ("ollama", "/usr/local/bin/ollama serve") => Kind::Ollama;
+        // 4. Databases / infra
+        rule_postgres: ("postgres", "/opt/homebrew/opt/postgresql@16/bin/postgres -D /opt/homebrew/var/postgresql@16") => Kind::Postgres;
+        rule_mysqld: ("mysqld", "/usr/sbin/mysqld --daemonize --pid-file=/run/mysqld/mysqld.pid") => Kind::Mysql;
+        rule_mariadbd: ("mariadbd", "/usr/sbin/mariadbd") => Kind::Mariadb;
+        rule_redis: ("redis-server", "/opt/homebrew/opt/redis/bin/redis-server 127.0.0.1:6379") => Kind::Redis;
+        rule_mongod: ("mongod", "/usr/bin/mongod --config /etc/mongod.conf") => Kind::Mongodb;
+        rule_nginx: ("nginx", "nginx: master process /usr/sbin/nginx -g daemon on; master_process on;") => Kind::Nginx;
+        rule_caddy: ("caddy", "caddy run --config /etc/caddy/Caddyfile") => Kind::Caddy;
+        // 5. Container plumbing
+        rule_docker_proxy: ("docker-proxy", "/usr/bin/docker-proxy -proto tcp -host-ip 0.0.0.0 -host-port 5432 -container-ip 172.17.0.2 -container-port 5432") => Kind::Docker;
+        rule_com_docker_backend: ("com.docker.backend", "/Applications/Docker.app/Contents/MacOS/com.docker.backend") => Kind::Docker;
+        rule_vpnkit: ("vpnkit", "/Applications/Docker.app/Contents/Resources/bin/vpnkit forward") => Kind::Docker;
+        rule_wslrelay: ("wslrelay.exe", "C:\\Program Files\\WSL\\wslrelay.exe --mode 1") => Kind::Docker;
+        // 6. Generic runtimes
+        rule_node: ("node", "node server.js") => Kind::Node;
+        rule_bun: ("bun", "bun run src/index.ts") => Kind::Bun;
+        rule_deno: ("deno", "deno run --allow-net main.ts") => Kind::Deno;
+        rule_python: ("Python", "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3 app.py") => Kind::Python;
+        rule_ruby: ("ruby", "ruby app.rb") => Kind::Ruby;
+        rule_php: ("php", "php -S localhost:8080 -t public") => Kind::Php;
+        rule_java: ("java", "/usr/bin/java -jar target/demo-0.0.1-SNAPSHOT.jar") => Kind::Java;
+        rule_dotnet: ("dotnet", "dotnet bin/Debug/net8.0/Api.dll") => Kind::Dotnet;
+        rule_go: ("go", "go run ./cmd/api") => Kind::Go;
+        rule_air: ("air", "air -c .air.toml") => Kind::Go;
+        rule_go_build: ("go-build3141592", "/tmp/go-build3141592/b001/exe/main") => Kind::Go;
+        // 7. Fallback
+        fallback_other: ("sshd", "sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups") => Kind::Other;
+    }
+
+    #[test]
+    fn every_rule_is_the_first_match_for_some_case() {
+        for (i, rule) in RULES.iter().enumerate() {
+            let covered = CASES
+                .iter()
+                .any(|(name, cmd, _)| matching_rule(name, cmd) == Some(i));
+            assert!(covered, "rule {i} ({rule:?}) has no test case");
+        }
+    }
+
+    #[test]
+    fn rules_are_ordered_by_group() {
+        assert!(
+            RULES.windows(2).all(|w| w[0].group <= w[1].group),
+            "RULES must stay in spec priority order"
+        );
+    }
+
+    #[test]
+    fn patterns_are_lowercase() {
+        for rule in RULES {
+            let (Match::ArgvContains(p) | Match::NameEquals(p) | Match::NameStartsWith(p)) =
+                rule.pattern;
+            assert_eq!(p, p.to_lowercase(), "{rule:?}");
+        }
+    }
+
+    // Ordering: a framework must beat the runtime it runs on.
+
+    #[test]
+    fn vite_beats_node() {
+        assert_eq!(
+            classify("node", "node /app/node_modules/.bin/vite"),
+            Kind::Vite
+        );
+    }
+
+    #[test]
+    fn next_beats_node() {
+        assert_eq!(
+            classify("node", "node /app/node_modules/.bin/next dev -p 3000"),
+            Kind::NextJs
+        );
+    }
+
+    #[test]
+    fn uvicorn_beats_python() {
+        assert_eq!(
+            classify(
+                "python3",
+                "python3 -m uvicorn main:app --reload --host 0.0.0.0"
+            ),
+            Kind::FastApi
+        );
+    }
+
+    #[test]
+    fn django_beats_python() {
+        assert_eq!(
+            classify("python", "python manage.py runserver"),
+            Kind::Django
+        );
+    }
+
+    #[test]
+    fn docker_proxy_is_docker_not_other() {
+        assert_eq!(
+            classify(
+                "docker-proxy",
+                "/usr/bin/docker-proxy -proto tcp -host-port 6379"
+            ),
+            Kind::Docker
+        );
+    }
+
+    #[test]
+    fn rails_beats_ruby() {
+        assert_eq!(classify("ruby", "ruby bin/rails s"), Kind::Rails);
+    }
+
+    // Matching details.
+
+    #[test]
+    fn matching_is_case_insensitive() {
+        assert_eq!(
+            classify("NODE", "NODE ./node_modules/.bin/VITE"),
+            Kind::Vite
+        );
+        assert_eq!(classify("Postgres", ""), Kind::Postgres);
+    }
+
+    #[test]
+    fn exe_suffix_is_stripped_from_names() {
+        assert_eq!(
+            classify("node.exe", "C:\\Program Files\\nodejs\\node.exe server.js"),
+            Kind::Node
+        );
+        assert_eq!(classify("com.docker.backend.EXE", ""), Kind::Docker);
+        assert_eq!(classify("postgres.exe", ""), Kind::Postgres);
+    }
+
+    #[test]
+    fn name_rules_do_not_match_argv() {
+        // A db tool talking about postgres is not postgres.
+        assert_eq!(
+            classify("pgcli", "pgcli postgres://localhost/app"),
+            Kind::Other
+        );
+    }
+
+    #[test]
+    fn go_rule_does_not_match_google_chrome() {
+        assert_eq!(
+            classify(
+                "Google Chrome Helper",
+                "Google Chrome Helper --type=utility"
+            ),
+            Kind::Other
+        );
+    }
+
+    #[test]
+    fn empty_input_is_other() {
+        assert_eq!(classify("", ""), Kind::Other);
+    }
+}
