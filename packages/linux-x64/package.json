@@ -1,0 +1,25 @@
+{
+  "name": "@whatsup-cli/linux-x64",
+  "version": "0.1.0",
+  "description": "The Linux x86_64 (glibc) binary for whatsup-cli. Install whatsup-cli, not this.",
+  "homepage": "https://github.com/GeekyAsif786/whatsup#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GeekyAsif786/whatsup.git",
+    "directory": "packages/linux-x64"
+  },
+  "license": "MIT",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "libc": [
+    "glibc"
+  ],
+  "files": [
+    "bin/whatsup"
+  ],
+  "preferUnplugged": true
+}

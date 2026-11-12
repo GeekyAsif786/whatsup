@@ -24,14 +24,47 @@ jobs:
         with:
           persist-credentials: false
       # rustup reads rust-toolchain.toml and installs stable + rustfmt + clippy.
-      - name: Show toolchain
-        run: rustup show active-toolchain --verbose
+      # Installed explicitly (not on first cargo use) so rust-cache below
+      # keys the cache on the right rustc version.
+      - name: Install toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain --verbose
+      # Caches ~/.cargo (registry, git deps) and target/ dependencies, keyed
+      # on OS, rustc version and Cargo.lock.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test --locked
+      # The npm launcher, the npm package assembler, the label sync script
+      # and the community-file checks (Node is preinstalled on every runner; no npm install).
+      - name: Node scripts
+        run: >-
+          node --test
+          packages/whatsup-cli/test/launcher.test.js
+          scripts/npm-assemble.test.mjs
+          scripts/sync-labels.test.mjs
+          scripts/community.test.mjs
+      # DESIGN.md section 15: the release binary (LTO, stripped by the
+      # release profile) must stay under 5 MB.
+      - name: Release binary size
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cargo build --release --locked
+          bin=target/release/whatsup
+          file "$bin"
+          file "$bin" | grep -q ', stripped' || { echo "::error::$bin is not stripped"; exit 1; }
+          size=$(stat -c %s "$bin")
+          limit=5000000
+          echo "stripped release binary: $size bytes (limit $limit)"
+          echo "Release binary (x86_64 Linux, stripped): $size bytes, limit $limit" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$size" -ge "$limit" ]; then
+            echo "::error::release binary is $size bytes, over the 5 MB budget"
+            exit 1
+          fi
 
   audit:
     name: audit
@@ -40,6 +73,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install toolchain
+        run: rustup toolchain install
+      # Caches ~/.cargo, including the cargo-audit binary installed below,
+      # so a cache hit turns the install into a no-op.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install cargo-audit
         run: cargo install cargo-audit --version 0.23.0 --locked
       - name: Audit

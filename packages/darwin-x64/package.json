@@ -1,0 +1,22 @@
+{
+  "name": "@whatsup-cli/darwin-x64",
+  "version": "0.1.0",
+  "description": "The macOS x86_64 (Intel) binary for whatsup-cli. Install whatsup-cli, not this.",
+  "homepage": "https://github.com/GeekyAsif786/whatsup#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GeekyAsif786/whatsup.git",
+    "directory": "packages/darwin-x64"
+  },
+  "license": "MIT",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin/whatsup"
+  ],
+  "preferUnplugged": true
+}

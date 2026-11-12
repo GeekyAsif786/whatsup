@@ -1,0 +1,73 @@
+name: Bug report
+description: Something in whatsup doesn't work, shows the wrong thing, or stops the wrong thing.
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Security problems go to the [security policy](https://github.com/GeekyAsif786/whatsup/security/policy), not here.
+
+        **Check what you paste:** command lines can contain passwords or tokens (`--password=...`). Remove them before posting.
+  - type: input
+    id: version
+    attributes:
+      label: whatsup version
+      description: Output of `whatsup --version`.
+      placeholder: whatsup 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple silicon)
+        - macOS (Intel)
+        - Linux x86_64
+        - Linux arm64
+        - Windows
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version and terminal
+      placeholder: e.g. macOS 26.1 in iTerm2, Ubuntu 24.04 in GNOME Terminal, Windows 11 in Windows Terminal
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - Homebrew
+        - npm / npx
+        - cargo install
+        - Binary from GitHub Releases
+        - Built from source
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start `npm run dev` in a Vite project
+        2. Run `whatsup list`
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The relevant part of `whatsup list --all --json` (with secrets removed) or any error message.
+      render: text
+    validations:
+      required: false

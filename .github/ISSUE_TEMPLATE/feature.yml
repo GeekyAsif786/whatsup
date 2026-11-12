@@ -1,0 +1,27 @@
+name: Feature request
+description: An idea for whatsup.
+labels: [enhancement, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        To teach whatsup a new framework, use the "New framework rule" form instead. The roadmap is in [docs/DESIGN.md section 18](https://github.com/GeekyAsif786/whatsup/blob/main/docs/DESIGN.md#18-roadmap).
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The problem, not the solution. What happens today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Anything else you tried?
+    validations:
+      required: false

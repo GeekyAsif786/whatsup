@@ -1,0 +1,22 @@
+# Categories for generated release notes (`gh release create --generate-notes`
+# in release.yml). A PR lands in the first category whose labels it has.
+# "Other changes" ("*") must stay last: GitHub matches "*" only against PRs
+# no earlier category took.
+changelog:
+  exclude:
+    labels: [duplicate, wontfix]
+  categories:
+    - title: Fixes
+      labels: [bug]
+    - title: New framework rules
+      labels: [framework-rule]
+    - title: Features
+      labels: [enhancement]
+    - title: Packaging
+      labels: [packaging]
+    - title: Docs
+      labels: [documentation]
+    - title: Dependencies
+      labels: [dependencies]
+    - title: Other changes
+      labels: ["*"]

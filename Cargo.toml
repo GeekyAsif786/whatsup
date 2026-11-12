@@ -6,6 +6,14 @@ description = "See what is listening on your dev machine: ports, dev servers, da
 license = "MIT"
 repository = "https://github.com/GeekyAsif786/whatsup"
 readme = "README.md"
+homepage = "https://github.com/GeekyAsif786/whatsup"
+keywords = ["ports", "tui", "devtools", "docker", "process"]
+categories = ["command-line-utilities", "development-tools", "network-programming"]
+# sysinfo 0.40 needs 1.95; checked with `cargo +1.95 check --locked --all-targets`.
+rust-version = "1.95"
+# Source, tests and their snapshots (so `cargo test` works from the crate);
+# no CI, docs or packaging. Cargo always adds Cargo.toml and Cargo.lock.
+include = ["/src/", "/tests/", "/README.md", "/LICENSE"]
 
 [[bin]]
 name = "whatsup"
@@ -18,7 +26,7 @@ path = "src/lib.rs"
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
-ctrlc = "3.5.2"
+ctrlc = { version = "3.5.2", features = ["termination"] }
 netstat2 = "0.11.2"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "layout-cache"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -38,3 +46,6 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Syste
 
 [dev-dependencies]
 insta = "1.49.0"
+
+[target."cfg(unix)".dev-dependencies]
+nix = { version = "0.31.3", default-features = false, features = ["signal", "term", "process", "poll"] }
