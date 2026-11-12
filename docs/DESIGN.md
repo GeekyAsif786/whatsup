@@ -355,6 +355,7 @@ StopResult = Stopped                        SIGTERM / terminate / docker stop su
            | ForceKilled                    SIGKILL after the grace period (--force / Y)
            | StillRunning                   alive after the grace period, no --force
            | Respawned { pid, parent }      port busy again 1.5 s later with a new PID;
+                                            pid = Option<u32> (None: new owner hidden),
                                             parent = Option<{pid, name}>
            | Failed { reason }
 

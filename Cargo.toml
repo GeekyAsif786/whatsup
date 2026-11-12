@@ -26,3 +26,9 @@ sysinfo = { version = "0.40.3", default-features = false, features = ["system"] 
 lto = true
 strip = true
 codegen-units = 1
+
+[target."cfg(unix)".dependencies]
+nix = { version = "0.31.3", default-features = false, features = ["signal"] }
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading"] }
