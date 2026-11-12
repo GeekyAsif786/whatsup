@@ -80,6 +80,7 @@ impl ProcessSource for SysinfoProcesses {
 #[cfg(test)]
 mod tests {
     use std::process::{Child, Command};
+    use std::time::{Duration, Instant};
 
     use super::*;
 
@@ -110,13 +111,26 @@ mod tests {
 
     /// Section 7.2 lesson: the targeted refresh must load cmd (and cwd on
     /// Linux/macOS) or classification silently degrades.
+    ///
+    /// Right after spawn, Linux can briefly report an empty cmdline (execve
+    /// has not set up the new argv yet). OnlyIfNotSet treats empty as "not
+    /// set", so a later refresh of the same source fills it: poll briefly.
     #[test]
     fn spawned_child_has_cmd_and_cwd() -> anyhow::Result<()> {
         let child = spawn_sleeper()?;
         let pid = child.0.id();
         let mut src = SysinfoProcesses::new()?;
-        let got = src.processes(&[pid])?;
-        let info = got.get(&pid).context("child not found")?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let info = loop {
+            let info = src
+                .processes(&[pid])?
+                .remove(&pid)
+                .context("child not found")?;
+            if !info.cmd.is_empty() || Instant::now() > deadline {
+                break info;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
         assert_eq!(info.pid, pid);
         assert!(!info.name.is_empty());
         assert!(!info.cmd.is_empty(), "cmd empty: {info:?}");
@@ -132,6 +146,16 @@ mod tests {
         Ok(())
     }
 
+    /// Polls until `pid` is no longer listed (the OS may lag a little).
+    fn assert_disappears(src: &mut SysinfoProcesses, pid: u32) -> anyhow::Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while src.processes(&[pid])?.contains_key(&pid) {
+            assert!(Instant::now() < deadline, "pid {pid} still listed");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        Ok(())
+    }
+
     #[test]
     fn exited_process_is_left_out() -> anyhow::Result<()> {
         let mut child = spawn_sleeper()?;
@@ -139,8 +163,7 @@ mod tests {
         child.0.kill()?;
         child.0.wait()?;
         let mut src = SysinfoProcesses::new()?;
-        assert!(!src.processes(&[pid])?.contains_key(&pid));
-        Ok(())
+        assert_disappears(&mut src, pid)
     }
 
     /// A killed but un-reaped child is a zombie on Unix: it counts as gone.
@@ -152,12 +175,7 @@ mod tests {
         child.0.kill()?;
         // Not waited yet: the child stays a zombie until the guard reaps it.
         let mut src = SysinfoProcesses::new()?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-        while src.processes(&[pid])?.contains_key(&pid) {
-            assert!(std::time::Instant::now() < deadline, "still listed");
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        Ok(())
+        assert_disappears(&mut src, pid)
     }
 
     #[test]

@@ -2,13 +2,15 @@
 //! scanner, and the built `whatsup` binary. Run in CI on Linux, macOS and
 //! Windows. Needs Python 3 on PATH (`python3`, or `python` on Windows).
 
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::process::{Child, Command, Output, Stdio};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use whatsup::model::{Entry, Exposure, Kind};
 use whatsup::scan::Scanner;
+use whatsup::sources::SocketSource;
+use whatsup::sources::sockets::NativeSockets;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -36,8 +38,17 @@ fn python() -> &'static str {
     if cfg!(windows) { "python" } else { "python3" }
 }
 
+/// True when the OS socket table has a TCP listener on `port`.
+///
+/// We check the socket table instead of connecting: on macOS runners the
+/// application firewall can hold a connection to a 0.0.0.0 listener open
+/// (pending approval) for minutes, while the socket is already listening.
+fn is_listening(port: u16) -> Result<bool, Box<dyn std::error::Error>> {
+    Ok(NativeSockets.listeners()?.iter().any(|l| l.port == port))
+}
+
 /// Starts `python -m http.server <port> --bind <bind>` and waits until it
-/// accepts connections.
+/// is listening.
 fn http_server(bind: &str) -> Result<Server, Box<dyn std::error::Error>> {
     let port = free_port(bind)?;
     let child = Command::new(python())
@@ -49,7 +60,7 @@ fn http_server(bind: &str) -> Result<Server, Box<dyn std::error::Error>> {
         .spawn()?;
     let server = Server { child, port };
     let deadline = Instant::now() + Duration::from_secs(20);
-    while TcpStream::connect(("127.0.0.1", port)).is_err() {
+    while !is_listening(port)? {
         if Instant::now() > deadline {
             return Err(format!("http.server on {bind}:{port} never came up").into());
         }
@@ -134,7 +145,7 @@ fn binary_port_list_kill_round_trip() -> TestResult {
 
     let out = whatsup(&["port", &p])?;
     assert_eq!(out.status.code(), Some(1), "{}", text(&out));
-    assert!(TcpStream::connect(("127.0.0.1", server.port)).is_err());
+    assert!(!is_listening(server.port)?);
     Ok(())
 }
 
@@ -145,7 +156,7 @@ fn kill_without_terminal_or_yes_is_a_usage_error() -> TestResult {
     assert_eq!(out.status.code(), Some(2), "{}", text(&out));
     assert!(String::from_utf8_lossy(&out.stderr).contains("pass -y"));
     // Nothing was stopped.
-    assert!(TcpStream::connect(("127.0.0.1", server.port)).is_ok());
+    assert!(is_listening(server.port)?);
     Ok(())
 }
 
