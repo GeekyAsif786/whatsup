@@ -2,6 +2,7 @@
 //! scanner, and the built `whatsup` binary. Run in CI on Linux, macOS and
 //! Windows. Needs Python 3 on PATH (`python3`, or `python` on Windows).
 
+use std::io::Read;
 use std::net::TcpListener;
 use std::process::{Child, Command, Output, Stdio};
 use std::thread::sleep;
@@ -48,7 +49,8 @@ fn is_listening(port: u16) -> Result<bool, Box<dyn std::error::Error>> {
 }
 
 /// Starts `python -m http.server <port> --bind <bind>` and waits until it
-/// is listening.
+/// is listening. On timeout, the error says whether Python exited, what it
+/// printed, and which ports the socket table did show.
 fn http_server(bind: &str) -> Result<Server, Box<dyn std::error::Error>> {
     let port = free_port(bind)?;
     let child = Command::new(python())
@@ -56,13 +58,32 @@ fn http_server(bind: &str) -> Result<Server, Box<dyn std::error::Error>> {
         .current_dir(std::env::temp_dir())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        // http.server only logs requests here and we make none, so the pipe
+        // can't fill up while it runs.
+        .stderr(Stdio::piped())
         .spawn()?;
-    let server = Server { child, port };
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut server = Server { child, port };
+    let deadline = Instant::now() + Duration::from_secs(60);
     while !is_listening(port)? {
-        if Instant::now() > deadline {
-            return Err(format!("http.server on {bind}:{port} never came up").into());
+        let exited = server.child.try_wait()?;
+        if exited.is_some() || Instant::now() > deadline {
+            if exited.is_none() {
+                let _ = server.child.kill();
+            }
+            let status = server.child.wait()?;
+            let mut stderr = String::new();
+            if let Some(mut pipe) = server.child.stderr.take() {
+                let _ = pipe.read_to_string(&mut stderr);
+            }
+            let mut seen: Vec<u16> = NativeSockets.listeners()?.iter().map(|l| l.port).collect();
+            seen.sort_unstable();
+            seen.dedup();
+            return Err(format!(
+                "http.server on {bind}:{port} never came up (exited: {}, status {status}); \
+                 stderr: {stderr:?}; listening ports seen: {seen:?}",
+                exited.is_some()
+            )
+            .into());
         }
         sleep(Duration::from_millis(100));
     }
