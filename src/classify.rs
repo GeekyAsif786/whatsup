@@ -4,7 +4,7 @@
 //! wins, so frameworks (which run on generic runtimes) come before runtimes.
 //! Adding a framework = one entry in [`RULES`] + one test case.
 
-use crate::model::Kind;
+use crate::model::{Entry, Kind};
 
 /// What a rule looks at. All comparisons are case-insensitive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,6 +131,95 @@ const CONTAINER_PLUMBING: &[&str] = &[
 pub fn is_container_plumbing(name: &str) -> bool {
     let name = normalize_name(name);
     CONTAINER_PLUMBING.contains(&name.as_str()) || name.starts_with("orbstack")
+}
+
+/// Colour groups for the TUI (DESIGN.md section 13).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KindGroup {
+    /// Frontend frameworks (green).
+    Frontend,
+    /// Python frameworks, tools and the runtime (yellow).
+    Python,
+    /// Databases (magenta).
+    Database,
+    /// Containers (cyan).
+    Docker,
+    /// Everything else (grey).
+    Other,
+}
+
+/// Which colour group a kind belongs to.
+pub const fn kind_group(kind: Kind) -> KindGroup {
+    match kind {
+        Kind::Vite
+        | Kind::NextJs
+        | Kind::Webpack
+        | Kind::ReactScripts
+        | Kind::Astro
+        | Kind::Nuxt
+        | Kind::Expo
+        | Kind::Metro => KindGroup::Frontend,
+        Kind::Django
+        | Kind::FastApi
+        | Kind::Flask
+        | Kind::Gunicorn
+        | Kind::Jupyter
+        | Kind::Streamlit
+        | Kind::PythonHttp
+        | Kind::Python => KindGroup::Python,
+        Kind::Postgres | Kind::Mysql | Kind::Mariadb | Kind::Redis | Kind::Mongodb => {
+            KindGroup::Database
+        }
+        Kind::Docker => KindGroup::Docker,
+        // Listed rather than `_`, so a new kind needs a colour decision.
+        Kind::Rails
+        | Kind::Puma
+        | Kind::Laravel
+        | Kind::Spring
+        | Kind::Ollama
+        | Kind::Nginx
+        | Kind::Caddy
+        | Kind::Node
+        | Kind::Bun
+        | Kind::Deno
+        | Kind::Ruby
+        | Kind::Php
+        | Kind::Java
+        | Kind::Dotnet
+        | Kind::Go
+        | Kind::Other => KindGroup::Other,
+    }
+}
+
+/// Container images (last path segment, without the tag) that speak a
+/// database protocol rather than HTTP.
+const DATABASE_IMAGES: &[&str] = &[
+    "postgres",
+    "postgresql",
+    "postgis",
+    "mysql",
+    "mariadb",
+    "redis",
+    "valkey",
+    "mongo",
+    "memcached",
+];
+
+/// Whether `o` / Enter should offer to open `http://localhost:<port>`
+/// (DESIGN.md section 11.4): not for databases, not for a container running
+/// a database image, and not for container plumbing with no known container.
+pub fn opens_in_browser(entry: &Entry) -> bool {
+    if kind_group(entry.kind) == KindGroup::Database {
+        return false;
+    }
+    if entry.kind != Kind::Docker {
+        return true;
+    }
+    entry.container.as_ref().is_some_and(|c| {
+        let repo = c.image.rsplit('/').next().unwrap_or(&c.image);
+        let name = repo.split([':', '@']).next().unwrap_or(repo);
+        !DATABASE_IMAGES.contains(&name.to_ascii_lowercase().as_str())
+    })
 }
 
 /// Index into [`RULES`] of the first rule that matches, if any.
@@ -590,5 +679,75 @@ mod tests {
     fn empty_needle_never_matches() {
         assert!(!argv_matches(&tokenize("node vite"), ""));
         assert!(!argv_matches(&tokenize(""), "vite"));
+    }
+
+    #[test]
+    fn kind_groups_follow_section_13() {
+        assert_eq!(kind_group(Kind::Vite), KindGroup::Frontend);
+        assert_eq!(kind_group(Kind::Metro), KindGroup::Frontend);
+        assert_eq!(kind_group(Kind::Django), KindGroup::Python);
+        assert_eq!(kind_group(Kind::PythonHttp), KindGroup::Python);
+        assert_eq!(kind_group(Kind::Python), KindGroup::Python);
+        assert_eq!(kind_group(Kind::Postgres), KindGroup::Database);
+        assert_eq!(kind_group(Kind::Mongodb), KindGroup::Database);
+        assert_eq!(kind_group(Kind::Docker), KindGroup::Docker);
+        assert_eq!(kind_group(Kind::Node), KindGroup::Other);
+        assert_eq!(kind_group(Kind::Nginx), KindGroup::Other);
+        assert_eq!(kind_group(Kind::Other), KindGroup::Other);
+    }
+
+    fn entry(kind: Kind, image: Option<&str>) -> Entry {
+        Entry {
+            port: 8080,
+            pid: None,
+            process: String::new(),
+            kind,
+            exposure: crate::model::Exposure::Local,
+            addrs: Vec::new(),
+            command: String::new(),
+            cwd: None,
+            uptime_secs: None,
+            memory_mb: None,
+            dev: true,
+            container: image.map(|i| crate::model::Container {
+                id: "abc".to_string(),
+                name: "c".to_string(),
+                image: i.to_string(),
+            }),
+        }
+    }
+
+    #[test]
+    fn only_http_like_entries_open_in_browser() {
+        // Web servers, runtimes and unknown dev servers: yes.
+        for kind in [
+            Kind::Vite,
+            Kind::Django,
+            Kind::Jupyter,
+            Kind::Node,
+            Kind::Other,
+        ] {
+            assert!(opens_in_browser(&entry(kind, None)), "{kind}");
+        }
+        // Databases: no.
+        for kind in [Kind::Postgres, Kind::Redis, Kind::Mysql, Kind::Mongodb] {
+            assert!(!opens_in_browser(&entry(kind, None)), "{kind}");
+        }
+        // Containers: by image; plumbing without a container: no.
+        assert!(opens_in_browser(&entry(Kind::Docker, Some("nginx:1.27"))));
+        assert!(opens_in_browser(&entry(
+            Kind::Docker,
+            Some("mongo-express")
+        )));
+        assert!(!opens_in_browser(&entry(Kind::Docker, Some("postgres:16"))));
+        assert!(!opens_in_browser(&entry(
+            Kind::Docker,
+            Some("library/Redis:7")
+        )));
+        assert!(!opens_in_browser(&entry(
+            Kind::Docker,
+            Some("ghcr.io/x/mongo@sha256:abc")
+        )));
+        assert!(!opens_in_browser(&entry(Kind::Docker, None)));
     }
 }
