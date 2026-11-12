@@ -2,7 +2,7 @@
 
 **Every port, dev server, database and container on your machine in one terminal view: see what it is, whether the network can reach it, and stop it with one key.**
 
-<!-- DEMO -->
+<img width="1200" height="640" alt="demo" src="https://github.com/user-attachments/assets/9840dc10-8869-486b-abeb-67828a37dff5" />
 
 Linux, macOS and Windows. One small native binary, no runtime.
 
