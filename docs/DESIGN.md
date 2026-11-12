@@ -193,15 +193,28 @@ runtimes: checking for 'node' first would label every Vite and Next.js server as
 
 | Priority | Group | Match on (case-insensitive) | Examples → kind |
 |---|---|---|---|
-| 1 | Frontend frameworks | argv contains | vite, next dev / next-server, webpack / react-scripts, astro, nuxt, expo / metro |
-| 2 | Backend frameworks | argv contains | manage.py runserver → django, uvicorn → fastapi, flask, gunicorn, rails / puma, artisan serve → laravel, spring |
-| 3 | Tools | argv contains | jupyter, streamlit, http.server → 'python http', ollama |
+| 1 | Frontend frameworks | argv tokens | vite, next dev / next-server, webpack / react-scripts, astro, nuxt, expo / metro |
+| 2 | Backend frameworks | argv tokens | manage.py runserver → django, uvicorn → fastapi, flask, gunicorn, rails / puma, artisan serve → laravel, spring |
+| 3 | Tools | argv tokens | jupyter, streamlit, http.server → 'python http', ollama |
 | 4 | Databases / infra | process name equals | postgres, mysqld / mariadbd, redis-server, mongod, nginx, caddy |
 | 5 | Container plumbing | process name equals | docker-proxy, com.docker.backend, vpnkit, wslrelay → docker |
 | 6 | Generic runtimes | process name starts with | node / bun / deno, python\*, ruby, php, java, dotnet, go (air, go-build) |
 | 7 | Fallback | — | other |
 
 - Strip `.exe` before matching on Windows.
+- **Argv token matching (normative).** Rules 1–3 do not use substring search, so a framework
+  name inside a path or a longer word (`invite-app`, `astronomy-site`, `export.js`,
+  `springboard.jar`, `nextcloud-sync.js`) never matches.
+  1. Split the command line on whitespace into tokens. For each token take its basename (the
+     text after the last `/` or `\`), lowercase it, and strip one extension from:
+     `.js .cjs .mjs .ts .py .exe .cmd .bat .ps1`.
+  2. A single-word needle matches a token that **equals** the needle, or that starts with the
+     needle followed by `-` (`jupyter` matches `jupyter-lab`; `next` does not match `nextcloud`).
+  3. A multi-word needle (`manage.py runserver`, `next dev`, `artisan serve`) matches the same
+     number of **consecutive** tokens, each compared as in step 2.
+  4. A needle word containing `.` (`http.server`, `manage.py`) is compared with the whole
+     basename, without stripping its extension.
+  5. Process-name rules (equals / starts with) are unchanged.
 - Kind labels: every token in the table is its own kind (slash means "listed together", not
   "same kind"), except where the table gives an explicit `→ kind`:
 

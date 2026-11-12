@@ -9,8 +9,9 @@ use crate::model::Kind;
 /// What a rule looks at. All comparisons are case-insensitive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Match {
-    /// The joined argv contains this substring.
-    ArgvContains(&'static str),
+    /// The argv contains this word (or these consecutive words), compared
+    /// token by token; see [`argv_matches`].
+    ArgvTokens(&'static str),
     /// The process name equals this string.
     NameEquals(&'static str),
     /// The process name starts with this string.
@@ -29,7 +30,7 @@ pub struct Rule {
 const fn argv(group: u8, needle: &'static str, kind: Kind) -> Rule {
     Rule {
         group,
-        pattern: Match::ArgvContains(needle),
+        pattern: Match::ArgvTokens(needle),
         kind,
     }
 }
@@ -53,7 +54,7 @@ const fn name_starts(group: u8, prefix: &'static str, kind: Kind) -> Rule {
 /// The rule table, in priority order. Group 7 (fallback) is implicit:
 /// no match means [`Kind::Other`].
 pub const RULES: &[Rule] = &[
-    // 1. Frontend frameworks: argv contains
+    // 1. Frontend frameworks: argv tokens
     argv(1, "vite", Kind::Vite),
     argv(1, "next dev", Kind::NextJs),
     argv(1, "next-server", Kind::NextJs),
@@ -63,7 +64,7 @@ pub const RULES: &[Rule] = &[
     argv(1, "nuxt", Kind::Nuxt),
     argv(1, "expo", Kind::Expo),
     argv(1, "metro", Kind::Metro),
-    // 2. Backend frameworks: argv contains
+    // 2. Backend frameworks: argv tokens
     argv(2, "manage.py runserver", Kind::Django),
     argv(2, "uvicorn", Kind::FastApi),
     argv(2, "flask", Kind::Flask),
@@ -72,7 +73,7 @@ pub const RULES: &[Rule] = &[
     argv(2, "puma", Kind::Puma),
     argv(2, "artisan serve", Kind::Laravel),
     argv(2, "spring", Kind::Spring),
-    // 3. Tools: argv contains
+    // 3. Tools: argv tokens
     argv(3, "jupyter", Kind::Jupyter),
     argv(3, "streamlit", Kind::Streamlit),
     argv(3, "http.server", Kind::PythonHttp),
@@ -113,12 +114,67 @@ pub fn classify(name: &str, cmd: &str) -> Kind {
 /// Index into [`RULES`] of the first rule that matches, if any.
 fn matching_rule(name: &str, cmd: &str) -> Option<usize> {
     let name = normalize_name(name);
-    let cmd = cmd.to_lowercase();
+    let tokens = tokenize(cmd);
     RULES.iter().position(|rule| match rule.pattern {
-        Match::ArgvContains(needle) => cmd.contains(needle),
+        Match::ArgvTokens(needle) => argv_matches(&tokens, needle),
         Match::NameEquals(want) => name == want,
         Match::NameStartsWith(prefix) => name.starts_with(prefix),
     })
+}
+
+/// Extensions removed from a token's basename before comparing (one at most).
+const STRIPPED_EXTENSIONS: &[&str] = &["js", "cjs", "mjs", "ts", "py", "exe", "cmd", "bat", "ps1"];
+
+/// One whitespace-separated piece of the command line.
+#[derive(Debug, PartialEq, Eq)]
+struct Token {
+    /// Lowercased text after the last `/` or `\`.
+    base: String,
+    /// `base` with one extension from [`STRIPPED_EXTENSIONS`] removed.
+    stem: String,
+}
+
+/// Splits a command line into tokens (DESIGN.md section 8, "argv tokens").
+fn tokenize(cmd: &str) -> Vec<Token> {
+    cmd.split_whitespace()
+        .map(|raw| {
+            // rsplit always yields at least one item; the fallback is unreachable.
+            let base = raw.rsplit(['/', '\\']).next().unwrap_or(raw).to_lowercase();
+            let stem = match base.rsplit_once('.') {
+                Some((stem, ext)) if STRIPPED_EXTENSIONS.contains(&ext) => stem.to_string(),
+                _ => base.clone(),
+            };
+            Token { base, stem }
+        })
+        .collect()
+}
+
+/// True when the needle's words match that many consecutive tokens.
+fn argv_matches(tokens: &[Token], needle: &str) -> bool {
+    let words: Vec<&str> = needle.split_whitespace().collect();
+    if words.is_empty() {
+        return false;
+    }
+    tokens
+        .windows(words.len())
+        .any(|run| run.iter().zip(&words).all(|(t, w)| word_matches(t, w)))
+}
+
+/// One needle word against one token.
+///
+/// A word containing `.` (`http.server`, `manage.py`) must equal the whole
+/// basename. Any other word must equal the extension-stripped basename, or
+/// be followed there by `-` (`jupyter` matches `jupyter-lab`, `next` does not
+/// match `nextcloud`).
+fn word_matches(token: &Token, word: &str) -> bool {
+    if word.contains('.') {
+        return token.base == word;
+    }
+    token.stem == word
+        || token
+            .stem
+            .strip_prefix(word)
+            .is_some_and(|rest| rest.starts_with('-'))
 }
 
 /// Lowercases the name and strips a trailing `.exe` (Windows executables).
@@ -157,7 +213,7 @@ mod tests {
         rule_next_dev: ("node", "node /home/me/shop/node_modules/.bin/next dev") => Kind::NextJs;
         rule_next_server: ("next-server (v14.2.3)", "next-server (v14.2.3)") => Kind::NextJs;
         rule_webpack: ("node", "node node_modules/.bin/webpack serve --mode development") => Kind::Webpack;
-        rule_react_scripts: ("node", "node /home/me/app/node_modules/react-scripts/scripts/start.js") => Kind::ReactScripts;
+        rule_react_scripts: ("node", "node /home/me/app/node_modules/.bin/react-scripts start") => Kind::ReactScripts;
         rule_astro: ("node", "node /home/me/blog/node_modules/.bin/astro dev") => Kind::Astro;
         rule_nuxt: ("node", "node /home/me/site/node_modules/nuxt/bin/nuxt.mjs dev") => Kind::Nuxt;
         rule_expo: ("node", "node /home/me/mobile/node_modules/.bin/expo start") => Kind::Expo;
@@ -170,7 +226,7 @@ mod tests {
         rule_rails: ("ruby", "ruby bin/rails server -p 3000") => Kind::Rails;
         rule_puma: ("ruby", "puma 6.4.2 (tcp://localhost:9292) [shop]") => Kind::Puma;
         rule_laravel: ("php", "php artisan serve --port=8000") => Kind::Laravel;
-        rule_spring: ("java", "/usr/bin/java -cp target/classes:target/lib/* org.springframework.boot.loader.launch.JarLauncher") => Kind::Spring;
+        rule_spring: ("java", "/usr/bin/java -classpath /opt/maven/boot/plexus-classworlds-2.8.0.jar org.codehaus.plexus.classworlds.launcher.Launcher spring-boot:run") => Kind::Spring;
         // 3. Tools
         rule_jupyter: ("python3.12", "/opt/homebrew/bin/python3.12 /opt/homebrew/bin/jupyter-lab --no-browser") => Kind::Jupyter;
         rule_streamlit: ("python3", "/home/me/dash/.venv/bin/python3 /home/me/dash/.venv/bin/streamlit run app.py") => Kind::Streamlit;
@@ -226,7 +282,7 @@ mod tests {
     #[test]
     fn patterns_are_lowercase() {
         for rule in RULES {
-            let (Match::ArgvContains(p) | Match::NameEquals(p) | Match::NameStartsWith(p)) =
+            let (Match::ArgvTokens(p) | Match::NameEquals(p) | Match::NameStartsWith(p)) =
                 rule.pattern;
             assert_eq!(p, p.to_lowercase(), "{rule:?}");
         }
@@ -329,5 +385,70 @@ mod tests {
     #[test]
     fn empty_input_is_other() {
         assert_eq!(classify("", ""), Kind::Other);
+    }
+
+    // Token matching: substrings inside paths or longer words must not match.
+
+    macro_rules! classify_cases {
+        ($($test:ident: ($name:expr, $cmd:expr) => $kind:expr;)*) => {
+            $(
+                #[test]
+                fn $test() {
+                    assert_eq!(classify($name, $cmd), $kind);
+                }
+            )*
+        };
+    }
+
+    classify_cases! {
+        // Regressions: the framework name only appears inside another word.
+        no_vite_in_invite_app: ("node", "node ~/code/invite-app/server.js") => Kind::Node;
+        no_astro_in_astronomy_site: ("node", "node /home/u/astronomy-site/index.js") => Kind::Node;
+        no_expo_in_export: ("node", "node scripts/export.js") => Kind::Node;
+        no_metro_in_metronome_app: ("node", "node /srv/metronome-app/main.js") => Kind::Node;
+        no_rails_in_guardrails: ("python3", "python3 /home/u/guardrails/app.py") => Kind::Python;
+        no_spring_in_springboard: ("java", "java -jar springboard.jar") => Kind::Java;
+        no_next_in_nextcloud: ("node", "node nextcloud-sync.js") => Kind::Node;
+        // Positives, including Windows paths and npm .cmd shims.
+        vite_bin_shim: ("node", "node /app/node_modules/.bin/vite --port 5173") => Kind::Vite;
+        vite_windows_js: ("node.exe", "node C:\\app\\node_modules\\vite\\bin\\vite.js") => Kind::Vite;
+        vite_windows_cmd_shim: ("cmd.exe", "C:\\app\\node_modules\\.bin\\vite.cmd") => Kind::Vite;
+        vite_mjs: ("node", "node /app/node_modules/vite/bin/vite.mjs") => Kind::Vite;
+        next_dev_full_path: ("node", "node /app/node_modules/next/dist/bin/next dev") => Kind::NextJs;
+        next_server_title: ("next-server (v15.0.3)", "next-server (v15.0.3)") => Kind::NextJs;
+        uvicorn_module: ("python", "python -m uvicorn main:app --reload") => Kind::FastApi;
+        django_plain: ("python", "python manage.py runserver") => Kind::Django;
+        django_dot_slash: ("python3", "python3 ./manage.py runserver 8001") => Kind::Django;
+        http_server_module: ("python3", "python3 -m http.server 8000") => Kind::PythonHttp;
+        jupyter_lab: ("jupyter-lab", "jupyter-lab --no-browser") => Kind::Jupyter;
+        // Multi-word needles need consecutive tokens.
+        next_and_dev_apart: ("node", "node next build --dev") => Kind::Node;
+        manage_py_other_command: ("python3", "python3 manage.py migrate runserver-notes") => Kind::Python;
+        artisan_serve: ("php", "php artisan serve") => Kind::Laravel;
+        artisan_other_command: ("php", "php artisan queue:work") => Kind::Php;
+        // Dotted needles compare the whole basename, extension included.
+        manage_py_needs_py: ("python3", "python3 manage runserver") => Kind::Python;
+        http_server_needs_exact_token: ("python3", "python3 -m http.server2") => Kind::Python;
+    }
+
+    #[test]
+    fn tokenize_takes_basename_lowercases_and_strips_one_extension() {
+        let t = tokenize("NODE C:\\App\\Vite.JS /x/y/app.d.ts manage.py");
+        let stems: Vec<&str> = t.iter().map(|t| t.stem.as_str()).collect();
+        let bases: Vec<&str> = t.iter().map(|t| t.base.as_str()).collect();
+        assert_eq!(bases, ["node", "vite.js", "app.d.ts", "manage.py"]);
+        assert_eq!(stems, ["node", "vite", "app.d", "manage"]);
+    }
+
+    #[test]
+    fn unlisted_extensions_are_kept() {
+        let t = tokenize("springboard.jar");
+        assert_eq!(t[0].stem, "springboard.jar");
+    }
+
+    #[test]
+    fn empty_needle_never_matches() {
+        assert!(!argv_matches(&tokenize("node vite"), ""));
+        assert!(!argv_matches(&tokenize(""), "vite"));
     }
 }
