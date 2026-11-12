@@ -1,0 +1,18 @@
+---
+source: src/tui/view.rs
+expression: "text(&draw(&app, COLOR, 80, 14))"
+---
+ whatsup   0 listening (dev)
+╭──────────────────────────────────────────────────────────────────────────────╮
+│  PORT   KIND          PROCESS                      PID     EXPOSED   UP   MEM│
+│                                                                              │
+│                            Nothing matches /nodez.                           │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+ /nodez   Enter keep · Esc clear · ↑↓ move

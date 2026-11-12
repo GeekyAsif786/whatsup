@@ -12,3 +12,4 @@ pub mod output;
 pub mod run;
 pub mod scan;
 pub mod sources;
+pub mod tui;

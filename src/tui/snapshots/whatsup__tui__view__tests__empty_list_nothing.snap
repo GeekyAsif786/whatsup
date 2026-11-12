@@ -1,0 +1,16 @@
+---
+source: src/tui/view.rs
+expression: "text(&draw(&app, COLOR, 70, 12))"
+---
+ whatsup   0 listening (dev)
+╭────────────────────────────────────────────────────────────────────╮
+│  PORT   KIND          PROCESS            PID     EXPOSED   UP   MEM│
+│                                                                    │
+│                        Nothing is listening.                       │
+│                                                                    │
+╰────────────────────────────────────────────────────────────────────╯
+
+
+
+
+ ↑↓ move · / filter · a all/dev · r refresh · q quit
