@@ -1,0 +1,82 @@
+# Every label this repository uses. Edit here, then run
+#   node scripts/sync-labels.mjs          (dry run: prints the plan)
+#   node scripts/sync-labels.mjs --apply  (creates/updates labels via gh)
+# The sync never deletes labels. It runs by hand, never in CI.
+# Colours are 6-digit hex without "#".
+
+- name: good first issue
+  color: 7057ff
+  description: Small, well-scoped task that is a good first contribution
+
+- name: help wanted
+  color: 008672
+  description: Extra attention is needed; contributions welcome
+
+- name: needs-triage
+  color: ededed
+  description: Not yet reviewed by a maintainer
+
+- name: framework-rule
+  color: 1d4ed8
+  description: Adding or fixing a classifier rule (src/classify.rs)
+
+- name: bug
+  color: d73a4a
+  description: Something isn't working
+
+- name: enhancement
+  color: a2eeef
+  description: New feature or request
+
+- name: "platform: linux"
+  color: fbca04
+  description: Only happens on Linux
+
+- name: "platform: macos"
+  color: c5def5
+  description: Only happens on macOS
+
+- name: "platform: windows"
+  color: 0e8a16
+  description: Only happens on Windows
+
+- name: docker
+  color: 0db7ed
+  description: Docker containers and published ports
+
+- name: tui
+  color: bfdadc
+  description: The interactive view
+
+- name: packaging
+  color: d4c5f9
+  description: Releases, Homebrew, npm, crates.io
+
+- name: performance
+  color: f9d0c4
+  description: Speed, memory use or binary size
+
+- name: documentation
+  color: 0075ca
+  description: Improvements or additions to documentation
+
+- name: wontfix
+  color: ffffff
+  description: This will not be worked on
+
+- name: duplicate
+  color: cfd3d7
+  description: This issue or pull request already exists
+
+# Applied by Dependabot; keep these names.
+- name: dependencies
+  color: 0366d6
+  description: Pull requests that update a dependency file
+
+- name: rust
+  color: "000000"
+  description: Pull requests that update Rust code
+
+- name: github_actions
+  color: "000000"
+  description: Pull requests that update GitHub Actions code

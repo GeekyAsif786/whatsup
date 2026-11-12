@@ -1,0 +1,40 @@
+name: New framework rule
+description: whatsup shows "other", "node", "python", ... for a framework it should name.
+title: "[Rule] "
+labels: [framework-rule]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Adding a rule is one line plus one test: see [CONTRIBUTING.md → Add a framework rule](https://github.com/GeekyAsif786/whatsup/blob/main/CONTRIBUTING.md#add-a-framework-rule). You're welcome to open this issue and send the PR yourself.
+
+        **Check what you paste:** remove passwords or tokens from command lines.
+  - type: input
+    id: framework
+    attributes:
+      label: Framework or tool
+      placeholder: e.g. Hugo (hugo server)
+    validations:
+      required: true
+  - type: textarea
+    id: entry
+    attributes:
+      label: What whatsup shows today
+      description: Start the server, run `whatsup list --all --json`, and paste its entry (at least `process`, `kind` and `command`).
+      render: json
+    validations:
+      required: true
+  - type: input
+    id: kind
+    attributes:
+      label: What it should show as KIND
+      placeholder: e.g. hugo
+    validations:
+      required: true
+  - type: checkboxes
+    id: self
+    attributes:
+      label: Contributing
+      options:
+        - label: I'd like to send the pull request myself
+          required: false
