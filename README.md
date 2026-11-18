@@ -156,6 +156,47 @@ To stop another user's process, run the same command with `sudo` (or as administ
 `--json` respects `--all`. Note that `command` is the full command line and may contain secrets
 passed as arguments (e.g. `--password=...`).
 
+## Troubleshooting
+
+**A row says "PID hidden".** The listener belongs to another user and your account can't see its
+PID (Linux; macOS doesn't list those at all). See [Permissions](#permissions).
+
+```sh
+sudo whatsup list --all
+```
+
+**Stopping fails without `sudo`.** whatsup never elevates itself, so it can only stop what your
+account may signal. Run the same command with `sudo` (or as administrator on Windows).
+
+```sh
+sudo whatsup kill :8080
+```
+
+**"It says respawned".** The port was busy again within 1.5 s of the stop, with a new process,
+usually because a parent such as nodemon or `uvicorn --reload` restarted it. The message names
+the parent when it is visible, and the exit code is 3. Stop that parent instead.
+
+```sh
+whatsup kill :3000    # "... respawned as pid 7 by nodemon (pid 6)"; then stop pid 6
+```
+
+**A Docker port shows as `docker` instead of a process.** The port is published by a container,
+so whatsup shows the container's name and image and stops it with `docker stop` (not by killing
+the proxy process). This needs the `docker` CLI to be available; without it, containers are not
+detected.
+
+```sh
+whatsup kill :5432    # runs docker stop on the container that publishes :5432
+```
+
+**`npx whatsup-cli` says the platform package isn't installed.** The binary comes from an
+optional dependency, which is skipped by `--omit=optional` / `--no-optional` and by lockfiles
+made on another platform. Reinstall without that flag.
+
+```sh
+npm install -g whatsup-cli
+```
+
 ## How it works
 
 1. **Sockets:** TCP listeners (IPv4 and IPv6) from the OS's native socket tables, through the
