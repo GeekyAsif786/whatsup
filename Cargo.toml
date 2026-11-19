@@ -39,7 +39,7 @@ strip = true
 codegen-units = 1
 
 [target."cfg(unix)".dependencies]
-nix = { version = "0.31.3", default-features = false, features = ["signal", "user"] }
+nix = { version = "0.32.0", default-features = false, features = ["signal", "user"] }
 
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading"] }
@@ -48,4 +48,4 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Syste
 insta = "1.49.0"
 
 [target."cfg(unix)".dev-dependencies]
-nix = { version = "0.31.3", default-features = false, features = ["signal", "term", "process", "poll"] }
+nix = { version = "0.32.0", default-features = false, features = ["signal", "term", "process", "poll"] }
